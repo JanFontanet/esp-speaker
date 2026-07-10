@@ -135,7 +135,8 @@ impl<'d> Audio<'d> {
         duration_ms: u64,
     ) -> Result<(), AudioError> {
         let total_frames = (duration_ms * AUDIO_SAMPLE_RATE as u64 / 1000).max(1) as u32;
-        let attack = (AUDIO_SAMPLE_RATE / 200).max(1); // ~5 ms, avoids an onset click
+        let attack = (AUDIO_SAMPLE_RATE / 80).max(1); // ~12 ms, gentle onset
+        let release = (AUDIO_SAMPLE_RATE / 25).max(1); // ~40 ms fade fully to silence
         // Full-scale oscillator; amplitude + envelope are applied per sample.
         let mut osc = SineGenerator::new(AUDIO_SAMPLE_RATE, frequency, 1.0);
 
@@ -150,7 +151,7 @@ impl<'d> Audio<'d> {
             let mut i = 0;
             while i + 1 < samples.len() {
                 let out = if n < total_frames {
-                    let env = note_envelope(n, total_frames, attack);
+                    let env = note_envelope(n, total_frames, attack, release);
                     let s = (osc.sample() as f32 * amplitude * env) as i16;
                     n += 1;
                     s
@@ -172,22 +173,28 @@ impl<'d> Audio<'d> {
     /// Netflix-style "ta-dum": two low percussive notes, the second lower,
     /// louder and longer. Pitches/timings are easy to tune by ear below.
     async fn play_connected(&mut self) -> Result<(), AudioError> {
-        self.play_note(147, 0.5, 170).await?; // "ta"  — D3, short
+        self.play_note(147, 0.4, 190).await?; // "ta"  — D3, short
         Timer::after(Duration::from_millis(30)).await;
-        self.play_note(98, 0.75, 780).await?; // "dum" — G2, long decay
+        self.play_note(98, 0.55, 850).await?; // "dum" — G2, long decay
         Ok(())
     }
 }
 
 /// Percussive amplitude envelope in `0.0..=1.0` for frame `n` of `total`:
-/// a short linear attack (over `attack` frames) then an exponential decay.
-fn note_envelope(n: u32, total: u32, attack: u32) -> f32 {
+/// a gentle linear attack, an exponential decay, and a linear release that
+/// fades fully to silence so notes don't end on a step (which clicks).
+fn note_envelope(n: u32, total: u32, attack: u32, release: u32) -> f32 {
     let attack_gain = if n < attack {
         n as f32 / attack as f32
     } else {
         1.0
     };
+    let release_gain = if n + release > total {
+        total.saturating_sub(n) as f32 / release as f32
+    } else {
+        1.0
+    };
     let progress = n as f32 / total as f32;
-    let decay = (-3.5 * progress).exp(); // ~1.0 -> ~0.03 across the note
-    attack_gain * decay
+    let decay = (-3.0 * progress).exp();
+    attack_gain * release_gain * decay
 }

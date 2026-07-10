@@ -37,14 +37,23 @@ impl SineGenerator {
         }
     }
 
-    /// Return the current table sample and advance the phase by one step.
+    /// Return the current sample and advance the phase by one step.
+    ///
+    /// Uses linear interpolation between the two adjacent table entries (an
+    /// 8-bit sub-step), which removes the "staircase" harmonics you'd otherwise
+    /// hear as a buzzy edge on low notes.
     #[inline]
     pub fn sample(&mut self) -> i16 {
         // Top TABLE_BITS index the table (0..=255 for 256 entries).
         let index = (self.phase >> (32 - TABLE_BITS)) as usize;
-        let s = self.table[index];
+        let next = (index + 1) % TABLE_SIZE;
+        // Next 8 bits below the index are the fraction between the two entries.
+        let frac = ((self.phase >> (32 - TABLE_BITS - 8)) & 0xFF) as i32;
+        let a = self.table[index] as i32;
+        let b = self.table[next] as i32;
+        let interp = a + (((b - a) * frac) >> 8);
         self.phase = self.phase.wrapping_add(self.phase_inc);
-        s
+        interp as i16
     }
 
     /// Fill buffer with interleaved stereo samples (L, R, L, R, ...)
