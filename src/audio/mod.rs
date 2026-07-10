@@ -173,9 +173,9 @@ impl<'d> Audio<'d> {
     /// Netflix-style "ta-dum": two low percussive notes, the second lower,
     /// louder and longer. Pitches/timings are easy to tune by ear below.
     async fn play_connected(&mut self) -> Result<(), AudioError> {
-        self.play_note(147, 0.4, 190).await?; // "ta"  — D3, short
+        self.play_note(165, 0.4, 190).await?; // "ta"  — D3, short
         Timer::after(Duration::from_millis(30)).await;
-        self.play_note(98, 0.55, 850).await?; // "dum" — G2, long decay
+        self.play_note(110, 0.55, 850).await?; // "dum" — G2, long decay
         Ok(())
     }
 }

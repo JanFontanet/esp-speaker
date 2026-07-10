@@ -51,14 +51,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut nvs = Nvs::new(board.flash);
     led_spawn(&spawner, board.rmt, board.led_pin);
+    audio_spawn(&spawner, board.audio);
+
     led_send(LedCommand::Brightness(10));
     led_send(LedCommand::Loop(Animation::Chase {
         color: Color::GREEN,
         speed: 2,
     }));
-
-    // Audio runs as an actor: fire-and-forget sounds via `audio_send` from anywhere.
-    audio_spawn(&spawner, board.audio);
 
     // TODO: Add a way to do a factory reset.
 

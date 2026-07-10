@@ -130,7 +130,4 @@ impl<'a> Nvs<'a> {
         Ok(())
     }
 
-    pub fn has_credentials(&mut self) -> bool {
-        self.load_credentials().is_ok()
-    }
 }
