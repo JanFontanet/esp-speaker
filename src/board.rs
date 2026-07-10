@@ -7,8 +7,11 @@
 //!
 //! Pin map verified against Waveshare's factory firmware.
 
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use esp_hal::{
+    Blocking,
     gpio::{AnyPin, Pin},
+    i2c::master::I2c,
     peripherals::{DMA_CH0, FLASH, I2C0, I2S0, Peripherals, RMT, SW_INTERRUPT, TIMG0, WIFI},
 };
 
@@ -18,7 +21,13 @@ pub const LED_COUNT: usize = 7;
 /// I2S playback sample rate, in Hz.
 pub const AUDIO_SAMPLE_RATE: u32 = 48_000;
 
-/// Peripherals and pins required by the audio subsystem.
+/// Shared I2C0 bus. Several on-board devices hang off it (ES8311 codec,
+/// TCA9555 expander, PCF85063 RTC, and later the ES7210 mic), so it is wrapped
+/// in an async mutex and shared by `&'static` reference between tasks.
+pub type I2cBus = Mutex<CriticalSectionRawMutex, I2c<'static, Blocking>>;
+
+/// Peripherals and pins required by the audio subsystem (I2S only; I2C is on
+/// the shared bus).
 pub struct AudioResources<'d> {
     pub i2s0: I2S0<'d>,
     pub dma_ch: DMA_CH0<'d>,
@@ -26,9 +35,6 @@ pub struct AudioResources<'d> {
     pub bclk: AnyPin<'d>,
     pub lrck: AnyPin<'d>,
     pub dout: AnyPin<'d>,
-    pub i2c0: I2C0<'d>,
-    pub sda: AnyPin<'d>,
-    pub scl: AnyPin<'d>,
 }
 
 /// All board resources, with every pin already assigned its documented role.
@@ -40,6 +46,9 @@ pub struct Board<'d> {
     pub led_pin: AnyPin<'d>,
     pub boot_button: AnyPin<'d>,
     pub wifi: WIFI<'d>,
+    pub i2c0: I2C0<'d>,
+    pub i2c_sda: AnyPin<'d>,
+    pub i2c_scl: AnyPin<'d>,
     pub audio: AudioResources<'d>,
 }
 
@@ -68,6 +77,9 @@ impl Board<'static> {
             led_pin: p.GPIO38.degrade(),
             boot_button: p.GPIO0.degrade(),
             wifi: p.WIFI,
+            i2c0: p.I2C0,
+            i2c_sda: p.GPIO11.degrade(),
+            i2c_scl: p.GPIO10.degrade(),
             audio: AudioResources {
                 i2s0: p.I2S0,
                 dma_ch: p.DMA_CH0,
@@ -75,9 +87,6 @@ impl Board<'static> {
                 bclk: p.GPIO13.degrade(),
                 lrck: p.GPIO14.degrade(),
                 dout: p.GPIO16.degrade(),
-                i2c0: p.I2C0,
-                sda: p.GPIO11.degrade(),
-                scl: p.GPIO10.degrade(),
             },
         }
     }

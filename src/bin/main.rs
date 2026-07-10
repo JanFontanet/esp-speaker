@@ -8,21 +8,23 @@
 #![deny(clippy::large_stack_frames)]
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
-use embassy_net::Stack;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
+use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
+use static_cell::StaticCell;
 
 use espeaker::{
     audio::{Sound, audio_send, audio_spawn},
-    board::Board,
+    board::{Board, I2cBus},
     boot,
     button::button_spawn,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     nvs::{Nvs, NvsError},
-    wifi,
+    time, wifi,
 };
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -54,8 +56,18 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut nvs = Nvs::new(board.flash);
     led_spawn(&spawner, board.rmt, board.led_pin);
-    audio_spawn(&spawner, board.audio);
     button_spawn(&spawner, board.boot_button);
+
+    // Build the shared I2C bus once and hand out `&'static` references to every
+    // device that lives on it (codec now, RTC below, ES7210 mic later).
+    let i2c = I2c::new(board.i2c0, I2cConfig::default())
+        .unwrap()
+        .with_sda(board.i2c_sda)
+        .with_scl(board.i2c_scl);
+    static I2C_BUS: StaticCell<I2cBus> = StaticCell::new();
+    let i2c_bus: &'static I2cBus = I2C_BUS.init(Mutex::new(i2c));
+
+    audio_spawn(&spawner, board.audio, i2c_bus);
 
     led_send(LedCommand::Brightness(10));
     led_send(LedCommand::Loop(Animation::Chase {
@@ -102,7 +114,8 @@ async fn main(spawner: Spawner) -> ! {
             {
                 Ok(stack) => {
                     boot::set_sta_fail_count(0);
-                    ready(stack).await;
+                    time::time_spawn(&spawner, stack, i2c_bus);
+                    ready().await;
                 }
                 Err(e) => {
                     error!("WiFi connect failed: {:?}; rebooting to retry", e);
@@ -122,7 +135,7 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 /// Steady state once the network is up. Never returns.
-async fn ready(_stack: Stack<'static>) -> ! {
+async fn ready() -> ! {
     defmt::info!("Ready! Stack is up.");
     led_send(LedCommand::Clear);
     audio_send(Sound::Connected);

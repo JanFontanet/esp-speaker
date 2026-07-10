@@ -7,7 +7,7 @@ pub use task::{Sound, audio_send, audio_spawn};
 use codec::Codec;
 use sine::SineGenerator;
 
-use crate::board::{AUDIO_SAMPLE_RATE, AudioResources};
+use crate::board::{AUDIO_SAMPLE_RATE, AudioResources, I2cBus};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     Async, dma_buffers,
@@ -28,13 +28,12 @@ pub enum AudioError {
 pub struct Audio<'d> {
     i2s_tx: I2sTx<'d, Async>,
     tx_buf: &'static mut [u8],
-    codec: Codec<'d>,
+    codec: Codec,
 }
 
 impl<'d> Audio<'d> {
-    pub fn new(res: AudioResources<'d>) -> Result<Self, AudioError> {
-        // Init codec over I2C
-        let codec = Codec::init(res.i2c0, res.sda, res.scl).map_err(|_| AudioError::CodecInit)?;
+    pub async fn new(res: AudioResources<'d>, bus: &'static I2cBus) -> Result<Self, AudioError> {
+        let codec = Codec::init(bus).await.map_err(|_| AudioError::CodecInit)?;
 
         let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(DMA_BUF_SIZE, DMA_BUF_SIZE);
 

@@ -1,14 +1,7 @@
+use crate::board::{AUDIO_SAMPLE_RATE, I2cBus};
 use embassy_time::{Duration, Timer};
 use es8311::{ClockConfig, Es8311, Resolution};
-use esp_hal::{
-    Blocking,
-    delay::Delay,
-    gpio::{InputPin, OutputPin},
-    i2c::master::{Config as I2cConfig, I2c},
-    peripherals::I2C0,
-};
-
-use crate::board::AUDIO_SAMPLE_RATE;
+use esp_hal::{Blocking, delay::Delay, i2c::master::I2c};
 
 const ES8311_ADDR: u8 = 0x18;
 const TCA9555_ADDR: u8 = 0x20;
@@ -18,32 +11,25 @@ const TCA9555_REG_CFG1: u8 = 0x07;
 // ES8311 requires an MCLK; 256×fs is a valid ratio present in the driver's table.
 const MCLK_FREQ: u32 = AUDIO_SAMPLE_RATE * 256;
 
-pub struct Codec<'d> {
-    i2c: I2c<'d, Blocking>,
+pub struct Codec {
+    bus: &'static I2cBus,
     es8311: Es8311,
 }
 
-impl<'d> Codec<'d> {
-    pub fn init(
-        i2c0: I2C0<'d>,
-        sda_pin: impl OutputPin + InputPin + 'd,
-        scl_pin: impl OutputPin + InputPin + 'd,
-    ) -> Result<Self, &'static str> {
-        let mut i2c = I2c::new(i2c0, I2cConfig::default())
-            .unwrap()
-            .with_sda(sda_pin)
-            .with_scl(scl_pin);
+impl Codec {
+    pub async fn init(bus: &'static I2cBus) -> Result<Self, &'static str> {
+        // Bring the codec up with the bus locked. This runs once at startup
+        // with no contention, so holding the lock for the whole sequence is fine.
+        let codec = Es8311::new(ES8311_ADDR);
+        let mut guard = bus.lock().await;
 
         let mut delay = Delay::new();
 
         // Keep the speaker amplifier OFF during codec bring-up. Enabling it
-        // first (as we used to) means the codec's power-up transient is
-        // amplified into an audible "pop"/clap.
-        tca9555_pa_configure(&mut i2c)?;
-        tca9555_pa_set(&mut i2c, false)?;
-
-        // Init ES8311
-        let codec = Es8311::new(ES8311_ADDR);
+        // first means the codec's power-up transient is amplified into an
+        // audible "pop"/clap.
+        tca9555_pa_configure(&mut *guard)?;
+        tca9555_pa_set(&mut *guard, false)?;
 
         let clk_cfg = ClockConfig {
             mclk_inverted: false,
@@ -55,7 +41,7 @@ impl<'d> Codec<'d> {
 
         codec
             .init(
-                &mut i2c,
+                &mut *guard,
                 &clk_cfg,
                 Resolution::Bits16,
                 Resolution::Bits16,
@@ -67,7 +53,7 @@ impl<'d> Codec<'d> {
             })?;
 
         codec
-            .volume_set(&mut i2c, 70, None)
+            .volume_set(&mut *guard, 70, None)
             .map_err(|_| "ES8311 volume set failed")?;
 
         // Start muted with the PA off. The audio task unmutes and powers the
@@ -75,14 +61,15 @@ impl<'d> Codec<'d> {
         // `set_output_enabled`), which avoids the boot clap and keeps the idle
         // DAC noise floor from being amplified.
         codec
-            .mute(&mut i2c, true)
+            .mute(&mut *guard, true)
             .map_err(|_| "ES8311 mute failed")?;
 
+        drop(guard);
         defmt::info!(
             "audio: codec ready at {}Hz (output muted)",
             AUDIO_SAMPLE_RATE
         );
-        Ok(Self { i2c, es8311: codec })
+        Ok(Self { bus, es8311: codec })
     }
 
     /// Enable or disable the speaker output path.
@@ -93,17 +80,18 @@ impl<'d> Codec<'d> {
     pub async fn set_output_enabled(&mut self, on: bool) {
         if on {
             // Unmute the DAC first (still silent, PA is off), let it settle,
-            // then power the amplifier up into a stable output.
-            let _ = self.es8311.mute(&mut self.i2c, false);
+            // then power the amplifier up into a stable output. Lock the bus
+            // only for each short transaction, never across the settle delays.
+            let _ = self.es8311.mute(&mut *self.bus.lock().await, false);
             Timer::after(Duration::from_millis(10)).await;
-            let _ = tca9555_pa_set(&mut self.i2c, true);
+            let _ = tca9555_pa_set(&mut *self.bus.lock().await, true);
             Timer::after(Duration::from_millis(30)).await;
         } else {
             // Power the amplifier down first so the DAC-mute transient isn't
             // amplified, then mute the DAC.
-            let _ = tca9555_pa_set(&mut self.i2c, false);
+            let _ = tca9555_pa_set(&mut *self.bus.lock().await, false);
             Timer::after(Duration::from_millis(5)).await;
-            let _ = self.es8311.mute(&mut self.i2c, true);
+            let _ = self.es8311.mute(&mut *self.bus.lock().await, true);
         }
     }
 }

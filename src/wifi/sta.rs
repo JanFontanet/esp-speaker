@@ -43,7 +43,7 @@ pub async fn connect(
     let (stack, runner) = embassy_net::new(
         device,
         embassy_net::Config::dhcpv4(Default::default()),
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        mk_static!(StackResources<5>, StackResources::<5>::new()),
         seed,
     );
 

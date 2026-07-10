@@ -9,7 +9,7 @@ use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
 use super::Audio;
-use crate::board::AudioResources;
+use crate::board::{AudioResources, I2cBus};
 
 /// How many pending sounds may be queued before new ones are dropped.
 const QUEUE_DEPTH: usize = 8;
@@ -40,13 +40,13 @@ pub fn audio_send(sound: Sound) {
 }
 
 /// Spawn the audio task. Call once from main.
-pub fn audio_spawn(spawner: &Spawner, res: AudioResources<'static>) {
-    spawner.spawn(audio_task(res).unwrap());
+pub fn audio_spawn(spawner: &Spawner, res: AudioResources<'static>, bus: &'static I2cBus) {
+    spawner.spawn(audio_task(res, bus).unwrap());
 }
 
 #[embassy_executor::task]
-async fn audio_task(res: AudioResources<'static>) {
-    let mut audio = match Audio::new(res) {
+async fn audio_task(res: AudioResources<'static>, bus: &'static I2cBus) {
+    let mut audio = match Audio::new(res, bus).await {
         Ok(audio) => audio,
         Err(e) => {
             defmt::error!("audio: init failed: {:?}", e);
