@@ -72,6 +72,14 @@ impl Animation {
 
     /// Run animation forever
     pub async fn run_forever<const N: usize>(&self, led: &mut LedController<'_, N>) -> ! {
+        // `Solid` has no frames to cycle, so set it once and then idle instead
+        // of busy-looping `run_once`.
+        if let Animation::Solid(color) = self {
+            led.set_all(*color).await;
+            loop {
+                core::future::pending::<()>().await;
+            }
+        }
         loop {
             self.run_once(led).await;
         }

@@ -7,23 +7,25 @@ use esp_hal::{
     peripherals::I2C0,
 };
 
+use crate::board::AUDIO_SAMPLE_RATE;
+
 const ES8311_ADDR: u8 = 0x18;
 const TCA9555_ADDR: u8 = 0x20;
 const TCA9555_REG_OUT1: u8 = 0x03;
 const TCA9555_REG_CFG1: u8 = 0x07;
 
-const SAMPLE_RATE: u32 = 48000;
-const MCLK_FREQ:   u32 = 12288000; // exactly in table for 16kHz
+// ES8311 requires an MCLK; 256×fs is a valid ratio present in the driver's table.
+const MCLK_FREQ: u32 = AUDIO_SAMPLE_RATE * 256;
 
 pub struct Codec {
     pub es8311: Es8311,
 }
 
 impl Codec {
-    pub fn init(
-        i2c0: I2C0<'static>,
-        sda_pin: impl OutputPin + InputPin + 'static,
-        scl_pin: impl OutputPin + InputPin + 'static,
+    pub fn init<'d>(
+        i2c0: I2C0<'d>,
+        sda_pin: impl OutputPin + InputPin + 'd,
+        scl_pin: impl OutputPin + InputPin + 'd,
     ) -> Result<Self, &'static str> {
         let mut i2c = I2c::new(i2c0, I2cConfig::default())
             .unwrap()
@@ -43,7 +45,7 @@ impl Codec {
             sclk_inverted: false,
             mclk_from_mclk_pin: true,
             mclk_frequency: MCLK_FREQ,
-            sample_frequency: SAMPLE_RATE,
+            sample_frequency: AUDIO_SAMPLE_RATE,
         };
 
         codec
@@ -67,7 +69,7 @@ impl Codec {
             .mute(&mut i2c, false)
             .map_err(|_| "ES8311 unmute failed")?;
 
-        defmt::info!("audio: codec ready at {}Hz", SAMPLE_RATE);
+        defmt::info!("audio: codec ready at {}Hz", AUDIO_SAMPLE_RATE);
         Ok(Self { es8311: codec })
     }
 }

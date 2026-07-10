@@ -4,17 +4,15 @@ pub mod sine;
 use codec::Codec;
 use sine::SineGenerator;
 
+use crate::board::{AudioResources, AUDIO_SAMPLE_RATE};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     Async,
     dma_buffers,
-    gpio::{InputPin, OutputPin},
     i2s::master::{Channels, Config, DataFormat, I2s, I2sTx},
-    peripherals::{DMA_CH0, I2C0, I2S0},
     time::Rate,
 };
 
-const SAMPLE_RATE: u32 = 48000;
 const DMA_BUF_SIZE: usize = 4096;
 
 #[derive(Debug, defmt::Format)]
@@ -30,42 +28,32 @@ pub struct Audio<'d> {
 }
 
 impl<'d> Audio<'d> {
-    pub fn new(
-        i2s0: I2S0<'d>,
-        dma_ch: DMA_CH0<'d>, // <-- correct type
-        mclk_pin: impl OutputPin + 'd,
-        bclk_pin: impl OutputPin + 'd,
-        lrck_pin: impl OutputPin + 'd,
-        dout_pin: impl OutputPin + 'd,
-        i2c0: I2C0<'static>,
-        sda_pin: impl OutputPin + InputPin + 'static,
-        scl_pin: impl OutputPin + InputPin + 'static,
-    ) -> Result<Self, AudioError> {
+    pub fn new(res: AudioResources<'d>) -> Result<Self, AudioError> {
         // Init codec over I2C
-        let codec = Codec::init(i2c0, sda_pin, scl_pin).map_err(|_| AudioError::CodecInit)?;
+        let codec = Codec::init(res.i2c0, res.sda, res.scl).map_err(|_| AudioError::CodecInit)?;
 
         let (_, _, tx_buffer, tx_descriptors) = dma_buffers!(DMA_BUF_SIZE, DMA_BUF_SIZE);
 
         let i2s = I2s::new(
-            i2s0,
-            dma_ch,
+            res.i2s0,
+            res.dma_ch,
             Config::new_tdm_philips().with_msb_shift(true)
-                .with_sample_rate(Rate::from_hz(SAMPLE_RATE))
+                .with_sample_rate(Rate::from_hz(AUDIO_SAMPLE_RATE))
                 .with_data_format(DataFormat::Data16Channel16)
                 .with_channels(Channels::STEREO),
         )
         .map_err(|_| AudioError::I2sError)?
         .into_async()
-        .with_mclk(mclk_pin);
+        .with_mclk(res.mclk);
 
         let i2s_tx = i2s
             .i2s_tx
-            .with_bclk(bclk_pin)
-            .with_ws(lrck_pin)
-            .with_dout(dout_pin)
+            .with_bclk(res.bclk)
+            .with_ws(res.lrck)
+            .with_dout(res.dout)
             .build(tx_descriptors);
 
-
+        let _ = codec;
 
         Ok(Self {
             i2s_tx,
@@ -86,7 +74,7 @@ impl<'d> Audio<'d> {
             amplitude,
             duration_ms
         );
-        let mut r#gen = SineGenerator::new(SAMPLE_RATE, frequency, amplitude);
+        let mut r#gen = SineGenerator::new(AUDIO_SAMPLE_RATE, frequency, amplitude);
 
         let end = embassy_time::Instant::now() + Duration::from_millis(duration_ms);
 

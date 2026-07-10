@@ -11,12 +11,12 @@ use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::Pin;
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 
 use espeaker::{
     audio::Audio,
+    board::Board,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     nvs::Nvs,
     wifi,
@@ -39,36 +39,18 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 36 * 1024);
 
-    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    // Split raw peripherals into named board resources (see board.rs).
+    let board = Board::new(peripherals);
+
+    let timg0 = TimerGroup::new(board.timg0);
     let sw_interrupt =
-        esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+        esp_hal::interrupt::software::SoftwareInterruptControl::new(board.sw_interrupt);
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
     // -------------- Embassy initialized ----------------
     info!("Start Rock&Roll!");
 
-//     use esp_hal::i2c::master::{Config as I2cConfig, I2c};
-// let mut i2c_scan = I2c::new(peripherals.I2C0, I2cConfig::default())
-//     .unwrap()
-//     .with_sda(peripherals.GPIO11)
-//     .with_scl(peripherals.GPIO10);
-
-// defmt::info!("Scanning I2C bus...");
-// for addr in 0x08..=0x77u8 {
-//     let mut buf = [0u8; 1];
-//     match i2c_scan.read(addr, &mut buf) {
-//         Ok(_)  => defmt::info!("  Found device at 0x{:02x}", addr),
-//         Err(_) => {}
-//     }
-// }
-// defmt::info!("I2C scan done");
-// loop {
-//     Timer::after(Duration::from_secs(1)).await;
-// }
-
-
-    let flash = peripherals.FLASH;
-    let mut nvs = Nvs::new(flash);
-    led_spawn(&spawner, peripherals.RMT, peripherals.GPIO38.degrade());
+    let mut nvs = Nvs::new(board.flash);
+    led_spawn(&spawner, board.rmt, board.led_pin);
     led_send(LedCommand::Brightness(10));
     led_send(LedCommand::Loop(Animation::Chase {
         color: Color::GREEN,
@@ -77,7 +59,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // TODO: Add a way to do a factory reset.
 
-    let wifi = wifi::init(peripherals.WIFI).unwrap();
+    let wifi = wifi::init(board.wifi).unwrap();
 
     match nvs.load_credentials() {
         Ok(creds) => {
@@ -86,18 +68,7 @@ async fn main(spawner: Spawner) -> ! {
                 &creds.ssid_str(),
                 &creds.password_str()
             );
-            let audio = Audio::new(
-                peripherals.I2S0,
-                peripherals.DMA_CH0,
-                peripherals.GPIO12,
-                peripherals.GPIO13,
-                peripherals.GPIO14,
-                peripherals.GPIO16,
-                peripherals.I2C0,
-                peripherals.GPIO11,
-                peripherals.GPIO10,
-            )
-            .unwrap();
+            let audio = Audio::new(board.audio).unwrap();
             main_loop(spawner, wifi, creds, audio).await;
             esp_hal::system::software_reset();
         }
