@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ESpeaker Setup</title>
+    <style>
+        body { font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; }
+        input { width: 100%; padding: 8px; margin: 8px 0; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>ESpeaker WiFi Setup</h1>
+    <form method="POST" action="/">
+        <label>WiFi Network (SSID)</label>
+        <input type="text" name="ssid" required maxlength="32">
+        <label>Password</label>
+        <input type="password" name="password" maxlength="64">
+        <button type="submit">Save & Connect</button>
+    </form>
+</body>
+</html>

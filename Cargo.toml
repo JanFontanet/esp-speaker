@@ -1,0 +1,60 @@
+[package]
+edition      = "2024"
+name         = "espeaker"
+rust-version = "1.88"
+version      = "0.1.0"
+
+[[bin]]
+name = "espeaker"
+path = "./src/bin/main.rs"
+
+[dependencies]
+esp-hal = { version = "~1.1.0", features = ["defmt", "esp32s3", "unstable"] }
+esp-rtos = { version = "0.3.0", features = ["defmt", "embassy", "esp32s3", "esp-radio", "esp-alloc"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32s3"] }
+esp-backtrace = { version = "0.19.0", features = [
+  "defmt",
+  "esp32s3",
+  # "panic-handler",
+] }
+esp-println = { version = "0.17.0", features = ["defmt-espflash", "esp32s3"] }
+esp-storage = { version = "0.9.0", features = ["esp32s3", "defmt"] }
+esp-radio = { version = "0.18.0", features = ["defmt", "esp32s3", "wifi"] }
+esp-alloc = { version = "0.10.0", features = ["esp32s3", "defmt", "nightly"] }
+
+embassy-executor = { version = "0.10.0", features = ["defmt"] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+embassy-net = { version = "0.9.1", features = [
+    "dhcpv4",
+    "medium-ethernet",
+    "tcp",
+    "udp",
+    "dns",
+] }
+embedded-io-async = "0.7"
+
+edge-dhcp = "0.8.0"
+edge-nal = "0.7.0"
+edge-nal-embassy = "0.9.0"
+
+defmt            = "1.1.1"
+# critical-section = "1.2.0"
+static_cell      = "2.1.1"
+embedded-storage = "0.3.1"
+heapless = { version = "0.9.3", features = ["defmt"] }
+micromath = "2.1.0"
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
+es8311 = "0.1.1"
+
+
+# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.dev]
+# The default debug profile is too slow and too big for resource-constrained devices.
+# Always build with some optimizations enabled.
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1     # LLVM can perform better optimizations using a single thread
+debug         = 2     # prefer slower builds but better debugging experience
+lto           = 'fat'
+opt-level     = 's'
