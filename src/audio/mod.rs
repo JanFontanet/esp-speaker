@@ -27,6 +27,7 @@ pub enum AudioError {
 pub struct Audio<'d> {
     i2s_tx: I2sTx<'d, Async>,
     tx_buf: &'static mut [u8],
+    codec: Codec<'d>,
 }
 
 impl<'d> Audio<'d> {
@@ -56,12 +57,17 @@ impl<'d> Audio<'d> {
             .with_dout(res.dout)
             .build(tx_descriptors);
 
-        let _ = codec;
-
         Ok(Self {
             i2s_tx,
             tx_buf: tx_buffer,
+            codec,
         })
+    }
+
+    /// Enable/disable the speaker amplifier + DAC output. The audio task calls
+    /// this to keep the amp powered down except while a sound is playing.
+    pub(crate) async fn set_output_enabled(&mut self, on: bool) {
+        self.codec.set_output_enabled(on).await;
     }
 
     /// Play a queued [`Sound`]. Called by the audio task.

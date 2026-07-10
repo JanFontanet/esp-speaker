@@ -56,9 +56,20 @@ async fn audio_task(res: AudioResources<'static>) {
     defmt::info!("audio: task ready");
 
     loop {
+        // Idle here with the amplifier powered down (no idle hiss).
         let sound = AUDIO_CHANNEL.receive().await;
-        if let Err(e) = audio.play(sound).await {
-            defmt::error!("audio: playback error: {:?}", e);
+
+        // Power the amp up once, drain everything currently queued, then power
+        // it back down — this avoids clicking the amp on/off between
+        // back-to-back sounds.
+        audio.set_output_enabled(true).await;
+        let mut next = Some(sound);
+        while let Some(sound) = next {
+            if let Err(e) = audio.play(sound).await {
+                defmt::error!("audio: playback error: {:?}", e);
+            }
+            next = AUDIO_CHANNEL.try_receive().ok();
         }
+        audio.set_output_enabled(false).await;
     }
 }
