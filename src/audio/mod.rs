@@ -1,14 +1,16 @@
 pub mod codec;
 pub mod sine;
+pub mod task;
+
+pub use task::{Sound, audio_send, audio_spawn};
 
 use codec::Codec;
 use sine::SineGenerator;
 
-use crate::board::{AudioResources, AUDIO_SAMPLE_RATE};
+use crate::board::{AUDIO_SAMPLE_RATE, AudioResources};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
-    Async,
-    dma_buffers,
+    Async, dma_buffers,
     i2s::master::{Channels, Config, DataFormat, I2s, I2sTx},
     time::Rate,
 };
@@ -37,7 +39,8 @@ impl<'d> Audio<'d> {
         let i2s = I2s::new(
             res.i2s0,
             res.dma_ch,
-            Config::new_tdm_philips().with_msb_shift(true)
+            Config::new_tdm_philips()
+                .with_msb_shift(true)
                 .with_sample_rate(Rate::from_hz(AUDIO_SAMPLE_RATE))
                 .with_data_format(DataFormat::Data16Channel16)
                 .with_channels(Channels::STEREO),
@@ -61,8 +64,21 @@ impl<'d> Audio<'d> {
         })
     }
 
+    /// Play a queued [`Sound`]. Called by the audio task.
+    pub(crate) async fn play(&mut self, sound: Sound) -> Result<(), AudioError> {
+        match sound {
+            Sound::Beep => self.beep().await,
+            Sound::Connected => self.play_connected().await,
+            Sound::Tone {
+                frequency,
+                amplitude,
+                duration_ms,
+            } => self.play_tone(frequency, amplitude, duration_ms).await,
+        }
+    }
+
     /// Play a sine wave tone for `duration_ms` milliseconds
-    pub async fn play_tone(
+    async fn play_tone(
         &mut self,
         frequency: u32,
         amplitude: f32,
@@ -98,12 +114,12 @@ impl<'d> Audio<'d> {
     }
 
     /// Play a beep (440Hz, 0.5s)
-    pub async fn beep(&mut self) -> Result<(), AudioError> {
+    async fn beep(&mut self) -> Result<(), AudioError> {
         self.play_tone(440, 0.5, 500).await
     }
 
     /// Play ascending tones on WiFi connect
-    pub async fn play_connected(&mut self) -> Result<(), AudioError> {
+    async fn play_connected(&mut self) -> Result<(), AudioError> {
         // Phase 1: Soft rising arpeggio (C major)
         self.play_tone(262, 0.2, 100).await?; // C4
         Timer::after(Duration::from_millis(20)).await;

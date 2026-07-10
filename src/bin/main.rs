@@ -15,7 +15,7 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 
 use espeaker::{
-    audio::Audio,
+    audio::{Sound, audio_send, audio_spawn},
     board::Board,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     nvs::Nvs,
@@ -57,6 +57,9 @@ async fn main(spawner: Spawner) -> ! {
         speed: 2,
     }));
 
+    // Audio runs as an actor: fire-and-forget sounds via `audio_send` from anywhere.
+    audio_spawn(&spawner, board.audio);
+
     // TODO: Add a way to do a factory reset.
 
     let wifi = wifi::init(board.wifi).unwrap();
@@ -68,8 +71,7 @@ async fn main(spawner: Spawner) -> ! {
                 &creds.ssid_str(),
                 &creds.password_str()
             );
-            let audio = Audio::new(board.audio).unwrap();
-            main_loop(spawner, wifi, creds, audio).await;
+            main_loop(spawner, wifi, creds).await;
             esp_hal::system::software_reset();
         }
         Err(e) => {
@@ -85,7 +87,6 @@ async fn main_loop(
     spawner: Spawner,
     wifi: wifi::WifiResources<'static>,
     creds: wifi::WifiCredentials,
-    mut audio: Audio<'_>,
 ) -> ! {
     let _stack = wifi::sta::connect(&spawner, wifi.controller, wifi.interfaces.station, &creds)
         .await
@@ -94,7 +95,7 @@ async fn main_loop(
     defmt::info!("Ready! Stack is up.");
     led_send(LedCommand::Clear);
 
-    audio.play_connected().await.unwrap();
+    audio_send(Sound::Connected);
     loop {
         info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
