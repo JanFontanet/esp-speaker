@@ -14,6 +14,7 @@ use esp_hal::{
     i2s::master::{Channels, Config, DataFormat, I2s, I2sTx},
     time::Rate,
 };
+use micromath::F32Ext;
 
 const DMA_BUF_SIZE: usize = 4096;
 
@@ -124,40 +125,69 @@ impl<'d> Audio<'d> {
         self.play_tone(440, 0.5, 500).await
     }
 
-    /// Play ascending tones on WiFi connect
-    async fn play_connected(&mut self) -> Result<(), AudioError> {
-        // Phase 1: Soft rising arpeggio (C major)
-        self.play_tone(262, 0.2, 100).await?; // C4
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(330, 0.2, 100).await?; // E4
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(392, 0.2, 100).await?; // G4
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(523, 0.25, 100).await?; // C5
+    /// Play a single percussive note: a short click-free attack followed by an
+    /// exponential decay. This gives a "dum" character instead of a flat beep,
+    /// which is what makes the connect sound read as a Netflix-style "ta-dum".
+    async fn play_note(
+        &mut self,
+        frequency: u32,
+        amplitude: f32,
+        duration_ms: u64,
+    ) -> Result<(), AudioError> {
+        let total_frames = (duration_ms * AUDIO_SAMPLE_RATE as u64 / 1000).max(1) as u32;
+        let attack = (AUDIO_SAMPLE_RATE / 200).max(1); // ~5 ms, avoids an onset click
+        // Full-scale oscillator; amplitude + envelope are applied per sample.
+        let mut osc = SineGenerator::new(AUDIO_SAMPLE_RATE, frequency, 1.0);
 
-        Timer::after(Duration::from_millis(80)).await;
-
-        // Phase 2: Middle flourish
-        self.play_tone(523, 0.25, 80).await?; // C5
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(587, 0.25, 80).await?; // D5
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(659, 0.25, 80).await?; // E5
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(784, 0.25, 80).await?; // G5
-        Timer::after(Duration::from_millis(20)).await;
-        self.play_tone(880, 0.3, 80).await?; // A5
-
-        Timer::after(Duration::from_millis(80)).await;
-
-        // Phase 3: Final resolved chord tones held longer
-        self.play_tone(1047, 0.35, 300).await?; // C6
-        Timer::after(Duration::from_millis(40)).await;
-        self.play_tone(880, 0.3, 200).await?; // A5
-        Timer::after(Duration::from_millis(40)).await;
-        self.play_tone(1047, 0.4, 500).await?; // C6 - final hold
-
-        // Total: ~2.1 seconds
+        let mut n: u32 = 0;
+        while n < total_frames {
+            let samples = unsafe {
+                core::slice::from_raw_parts_mut(
+                    self.tx_buf.as_mut_ptr() as *mut i16,
+                    self.tx_buf.len() / 2,
+                )
+            };
+            let mut i = 0;
+            while i + 1 < samples.len() {
+                let out = if n < total_frames {
+                    let env = note_envelope(n, total_frames, attack);
+                    let s = (osc.sample() as f32 * amplitude * env) as i16;
+                    n += 1;
+                    s
+                } else {
+                    0 // pad the tail of the final buffer with silence
+                };
+                samples[i] = out;
+                samples[i + 1] = out;
+                i += 2;
+            }
+            self.i2s_tx
+                .write_dma_async(&mut self.tx_buf)
+                .await
+                .map_err(|_| AudioError::I2sError)?;
+        }
         Ok(())
     }
+
+    /// Netflix-style "ta-dum": two low percussive notes, the second lower,
+    /// louder and longer. Pitches/timings are easy to tune by ear below.
+    async fn play_connected(&mut self) -> Result<(), AudioError> {
+        self.play_note(147, 0.5, 170).await?; // "ta"  — D3, short
+        Timer::after(Duration::from_millis(30)).await;
+        self.play_note(98, 0.75, 780).await?; // "dum" — G2, long decay
+        Ok(())
+    }
+}
+
+/// Percussive amplitude envelope in `0.0..=1.0` for frame `n` of `total`:
+/// a short linear attack (over `attack` frames) then an exponential decay.
+fn note_envelope(n: u32, total: u32, attack: u32) -> f32 {
+    let attack_gain = if n < attack {
+        n as f32 / attack as f32
+    } else {
+        1.0
+    };
+    let progress = n as f32 / total as f32;
+    let decay = (-3.5 * progress).exp(); // ~1.0 -> ~0.03 across the note
+    attack_gain * decay
 }

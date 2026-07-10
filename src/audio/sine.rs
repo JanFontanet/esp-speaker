@@ -37,16 +37,23 @@ impl SineGenerator {
         }
     }
 
+    /// Return the current table sample and advance the phase by one step.
+    #[inline]
+    pub fn sample(&mut self) -> i16 {
+        // Top TABLE_BITS index the table (0..=255 for 256 entries).
+        let index = (self.phase >> (32 - TABLE_BITS)) as usize;
+        let s = self.table[index];
+        self.phase = self.phase.wrapping_add(self.phase_inc);
+        s
+    }
+
     /// Fill buffer with interleaved stereo samples (L, R, L, R, ...)
     pub fn fill(&mut self, buf: &mut [i16]) {
         let mut i = 0;
         while i + 1 < buf.len() {
-            // Top TABLE_BITS index the table (0..=255 for 256 entries).
-            let index = (self.phase >> (32 - TABLE_BITS)) as usize;
-            let sample = self.table[index];
-            buf[i] = sample; // left
-            buf[i + 1] = sample; // right
-            self.phase = self.phase.wrapping_add(self.phase_inc);
+            let s = self.sample();
+            buf[i] = s; // left
+            buf[i + 1] = s; // right
             i += 2;
         }
     }
