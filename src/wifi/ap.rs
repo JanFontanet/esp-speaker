@@ -108,8 +108,9 @@ async fn serve_once(
             Ok(0) => break,
             Ok(n) => {
                 pos += n;
-                let so_far = unsafe { core::str::from_utf8_unchecked(&buf[..pos]) };
-                if so_far.contains("\r\n\r\n") {
+                // Detect end-of-headers directly in the raw bytes: the request
+                // may not be valid UTF-8, so we must not interpret it as a str.
+                if buf[..pos].windows(4).any(|w| w == b"\r\n\r\n") {
                     break;
                 }
             }
@@ -154,27 +155,68 @@ async fn serve_once(
     Ok(None)
 }
 
-/// Parse URL-encoded POST body: ssid=...&password=...
+/// Parse a URL-encoded POST body: `ssid=...&password=...`.
 fn parse_credentials(request: &str) -> Option<WifiCredentials> {
     let body = request.split("\r\n\r\n").nth(1)?;
 
-    let mut ssid = "";
-    let mut password = "";
+    let mut ssid_enc = "";
+    let mut password_enc = "";
 
     for pair in body.split('&') {
         let mut kv = pair.splitn(2, '=');
         match (kv.next(), kv.next()) {
-            (Some("ssid"), Some(v)) => ssid = v,
-            (Some("password"), Some(v)) => password = v,
+            (Some("ssid"), Some(v)) => ssid_enc = v,
+            (Some("password"), Some(v)) => password_enc = v,
             _ => {}
         }
     }
+
+    let ssid = url_decode::<32>(ssid_enc)?;
+    let password = url_decode::<64>(password_enc)?;
+
+    let ssid = core::str::from_utf8(&ssid).ok()?;
+    let password = core::str::from_utf8(&password).ok()?;
 
     if ssid.is_empty() {
         return None;
     }
 
     Some(WifiCredentials::new(ssid, password))
+}
+
+fn url_decode<const N: usize>(input: &str) -> Option<heapless::Vec<u8, N>> {
+    let bytes = input.as_bytes();
+    let mut out = heapless::Vec::<u8, N>::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = match bytes[i] {
+            b'+' => {
+                i += 1;
+                b' '
+            }
+            b'%' => {
+                let hi = hex_val(*bytes.get(i + 1)?)?;
+                let lo = hex_val(*bytes.get(i + 2)?)?;
+                i += 3;
+                (hi << 4) | lo
+            }
+            other => {
+                i += 1;
+                other
+            }
+        };
+        out.push(byte).ok()?;
+    }
+    Some(out)
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn format_header(content_len: usize) -> heapless::String<128> {

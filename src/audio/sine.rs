@@ -2,12 +2,20 @@ use core::f32::consts::PI;
 use micromath::F32Ext;
 
 const TABLE_SIZE: usize = 256;
+/// `TABLE_SIZE == 2^TABLE_BITS`; the top `TABLE_BITS` of the phase accumulator
+/// select the table entry.
+const TABLE_BITS: u32 = 8;
 
-/// Pre-computed sine lookup table (i16 samples)
+/// Pre-computed sine lookup table driven by a fixed-point phase accumulator
+/// (a numerically controlled oscillator).
+///
+/// The phase is a `u32` spanning a full `2^32` per cycle, so the frequency is
+/// accurate for any pitch — the previous integer "table steps per sample"
+/// truncated to zero for low frequencies (silence) and detuned the rest.
 pub struct SineGenerator {
     table: [i16; TABLE_SIZE],
-    phase: usize,
-    phase_inc: usize,
+    phase: u32,
+    phase_inc: u32,
 }
 
 impl SineGenerator {
@@ -19,8 +27,8 @@ impl SineGenerator {
                 * (2.0 * PI * i as f32 / TABLE_SIZE as f32).sin()) as i16;
             table[i] = sample;
         }
-        // phase_inc = how many table steps per sample
-        let phase_inc = (TABLE_SIZE as u32 * frequency / sample_rate) as usize;
+        // Phase advance per sample: `frequency / sample_rate` of a full 2^32 cycle.
+        let phase_inc = (((frequency as u64) << 32) / sample_rate as u64) as u32;
 
         Self {
             table,
@@ -33,10 +41,12 @@ impl SineGenerator {
     pub fn fill(&mut self, buf: &mut [i16]) {
         let mut i = 0;
         while i + 1 < buf.len() {
-            let sample = self.table[self.phase % TABLE_SIZE];
+            // Top TABLE_BITS index the table (0..=255 for 256 entries).
+            let index = (self.phase >> (32 - TABLE_BITS)) as usize;
+            let sample = self.table[index];
             buf[i] = sample; // left
             buf[i + 1] = sample; // right
-            self.phase = (self.phase + self.phase_inc) % TABLE_SIZE;
+            self.phase = self.phase.wrapping_add(self.phase_inc);
             i += 2;
         }
     }
