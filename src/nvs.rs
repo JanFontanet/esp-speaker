@@ -51,6 +51,11 @@ impl IntoBytes for WifiCredentials {
         if ssid_len > 32 || password_len > 64 {
             return Err(NvsError::InvalidData);
         }
+        // An empty SSID means the slot is unset/cleared (erased flash reads as
+        // all-ones -> rejected above; a wipe writes zeros -> rejected here).
+        if ssid_len == 0 {
+            return Err(NvsError::NotFound);
+        }
 
         let mut ssid = [0u8; 32];
         let mut password = [0u8; 64];
@@ -129,5 +134,4 @@ impl<'a> Nvs<'a> {
         defmt::info!("nvs: credentials cleared");
         Ok(())
     }
-
 }

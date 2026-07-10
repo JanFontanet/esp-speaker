@@ -6,8 +6,9 @@
     holding buffers for the duration of a data transfer."
 )]
 #![deny(clippy::large_stack_frames)]
-use defmt::{error, info};
+use defmt::{error, info, warn};
 use embassy_executor::Spawner;
+use embassy_net::Stack;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -17,8 +18,10 @@ use esp_println as _;
 use espeaker::{
     audio::{Sound, audio_send, audio_spawn},
     board::Board,
+    boot,
+    button::button_spawn,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
-    nvs::Nvs,
+    nvs::{Nvs, NvsError},
     wifi,
 };
 
@@ -52,6 +55,7 @@ async fn main(spawner: Spawner) -> ! {
     let mut nvs = Nvs::new(board.flash);
     led_spawn(&spawner, board.rmt, board.led_pin);
     audio_spawn(&spawner, board.audio);
+    button_spawn(&spawner, board.boot_button);
 
     led_send(LedCommand::Brightness(10));
     led_send(LedCommand::Loop(Animation::Chase {
@@ -59,45 +63,71 @@ async fn main(spawner: Spawner) -> ! {
         speed: 2,
     }));
 
-    // TODO: Add a way to do a factory reset.
+    // A long BOOT-button press (see button_task) requests a wipe via a
+    // persistent flag and reboots; honor it here now that we own the flash.
+    if boot::take_factory_reset() {
+        info!("Factory reset: clearing stored WiFi credentials");
+        let _ = nvs.clear_credentials();
+        boot::set_sta_fail_count(0);
+    }
+
+    // After too many consecutive failed connects, stop retrying (likely-bad)
+    // credentials and drop into the config portal instead of reboot-looping.
+    let force_portal = boot::sta_fail_count() >= boot::MAX_STA_FAILS;
+    if force_portal {
+        warn!(
+            "{} consecutive failed connects; starting config portal",
+            boot::sta_fail_count()
+        );
+        boot::set_sta_fail_count(0);
+    }
 
     let wifi = wifi::init(board.wifi).unwrap();
 
-    match nvs.load_credentials() {
+    let creds = if force_portal {
+        Err(NvsError::NotFound)
+    } else {
+        nvs.load_credentials()
+    };
+
+    match creds {
         Ok(creds) => {
-            info!(
-                "Loaded WiFi credentials: SSID: {:?}, pwd: {}",
-                &creds.ssid_str(),
-                &creds.password_str()
-            );
-            main_loop(spawner, wifi, creds).await;
-            esp_hal::system::software_reset();
+            info!("Loaded WiFi credentials: SSID: {:?}", &creds.ssid_str());
+            // Count this attempt. It's cleared on success but persists across
+            // the reboot we do on failure, so repeated failures eventually
+            // open the portal via `force_portal` above.
+            boot::set_sta_fail_count(boot::sta_fail_count() + 1);
+            match wifi::sta::connect(&spawner, wifi.controller, wifi.interfaces.station, &creds)
+                .await
+            {
+                Ok(stack) => {
+                    boot::set_sta_fail_count(0);
+                    ready(stack).await;
+                }
+                Err(e) => {
+                    error!("WiFi connect failed: {:?}; rebooting to retry", e);
+                    led_send(LedCommand::SetAll(Color::RED));
+                    Timer::after(Duration::from_secs(2)).await;
+                    esp_hal::system::software_reset();
+                }
+            }
         }
         Err(e) => {
-            info!("No WiFi credentials found in NVS: {:?}", e);
+            info!("No usable WiFi credentials ({:?}); starting portal", e);
             no_creds_boot(nvs, spawner, wifi).await;
             Timer::after(Duration::from_secs(1)).await;
             esp_hal::system::software_reset();
         }
-    };
+    }
 }
 
-async fn main_loop(
-    spawner: Spawner,
-    wifi: wifi::WifiResources<'static>,
-    creds: wifi::WifiCredentials,
-) -> ! {
-    let _stack = wifi::sta::connect(&spawner, wifi.controller, wifi.interfaces.station, &creds)
-        .await
-        .unwrap();
-
+/// Steady state once the network is up. Never returns.
+async fn ready(_stack: Stack<'static>) -> ! {
     defmt::info!("Ready! Stack is up.");
     led_send(LedCommand::Clear);
-
     audio_send(Sound::Connected);
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        Timer::after(Duration::from_secs(30)).await;
     }
 }
 

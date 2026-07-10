@@ -9,9 +9,7 @@
 
 use esp_hal::{
     gpio::{AnyPin, Pin},
-    peripherals::{
-        DMA_CH0, FLASH, I2C0, I2S0, Peripherals, RMT, SW_INTERRUPT, TIMG0, WIFI,
-    },
+    peripherals::{DMA_CH0, FLASH, I2C0, I2S0, Peripherals, RMT, SW_INTERRUPT, TIMG0, WIFI},
 };
 
 /// Number of on-board WS2812 RGB LEDs (7-LED ring).
@@ -40,6 +38,7 @@ pub struct Board<'d> {
     pub flash: FLASH<'d>,
     pub rmt: RMT<'d>,
     pub led_pin: AnyPin<'d>,
+    pub boot_button: AnyPin<'d>,
     pub wifi: WIFI<'d>,
     pub audio: AudioResources<'d>,
 }
@@ -67,6 +66,7 @@ impl Board<'static> {
             flash: p.FLASH,
             rmt: p.RMT,
             led_pin: p.GPIO38.degrade(),
+            boot_button: p.GPIO0.degrade(),
             wifi: p.WIFI,
             audio: AudioResources {
                 i2s0: p.I2S0,
