@@ -3,6 +3,8 @@ pub mod sta;
 
 use esp_hal::peripherals::WIFI;
 use esp_radio::wifi::{ControllerConfig, Interfaces, WifiController};
+use heapless::String;
+use serde::{Deserialize, Serialize};
 
 pub struct WifiResources<'d> {
     pub controller: WifiController<'d>,
@@ -31,36 +33,45 @@ pub enum WifiError {
     InvalidCredentials,
 }
 
-// Credenciales con longitudes fijas (máx. 32 bytes para SSID, 64 para contraseña)
-pub struct WifiCredentials {
-    pub ssid: [u8; 32],
-    pub password: [u8; 64],
-    pub ssid_len: usize,     // Longitud real del SSID
-    pub password_len: usize, // Longitud real de la contraseña
+// Persisted device configuration: Wi-Fi credentials plus a friendly name.
+// Fixed-capacity strings so it fits a bounded NVS record.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct DeviceConfig {
+    ssid: String<32>,
+    password: String<64>,
+    name: String<32>,
 }
 
-impl WifiCredentials {
-    pub fn new(ssid: &str, password: &str) -> Self {
-        let mut ssid_bytes = [0u8; 32];
-        let mut password_bytes = [0u8; 64];
-
-        // Copia SSID y contraseña a los arrays
-        ssid_bytes[..ssid.len()].copy_from_slice(ssid.as_bytes());
-        password_bytes[..password.len()].copy_from_slice(password.as_bytes());
-
+impl DeviceConfig {
+    pub fn new(ssid: &str, password: &str, name: &str) -> Self {
         Self {
-            ssid: ssid_bytes,
-            password: password_bytes,
-            ssid_len: ssid.len(),
-            password_len: password.len(),
+            ssid: truncated(ssid),
+            password: truncated(password),
+            name: truncated(name),
         }
     }
 
-    pub fn ssid_str(&self) -> &str {
-        core::str::from_utf8(&self.ssid[..self.ssid_len]).unwrap_or("")
+    pub fn ssid(&self) -> &str {
+        &self.ssid
     }
 
-    pub fn password_str(&self) -> &str {
-        core::str::from_utf8(&self.password[..self.password_len]).unwrap_or("")
+    pub fn password(&self) -> &str {
+        &self.password
     }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// Copy `s` into a fixed-capacity `String`, truncating at the last char
+/// boundary that fits within `N`.
+fn truncated<const N: usize>(s: &str) -> String<N> {
+    let mut out = String::new();
+    for ch in s.chars() {
+        if out.push(ch).is_err() {
+            break;
+        }
+    }
+    out
 }

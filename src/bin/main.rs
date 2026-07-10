@@ -79,7 +79,7 @@ async fn main(spawner: Spawner) -> ! {
     // persistent flag and reboots; honor it here now that we own the flash.
     if boot::take_factory_reset() {
         info!("Factory reset: clearing stored WiFi credentials");
-        let _ = nvs.clear_credentials();
+        let _ = nvs.clear_config();
         boot::set_sta_fail_count(0);
     }
 
@@ -99,12 +99,16 @@ async fn main(spawner: Spawner) -> ! {
     let creds = if force_portal {
         Err(NvsError::NotFound)
     } else {
-        nvs.load_credentials()
+        nvs.load_config()
     };
 
     match creds {
         Ok(creds) => {
-            info!("Loaded WiFi credentials: SSID: {:?}", &creds.ssid_str());
+            info!(
+                "Loaded config: name={:?}, ssid={:?}",
+                creds.name(),
+                creds.ssid()
+            );
             // Count this attempt. It's cleared on success but persists across
             // the reboot we do on failure, so repeated failures eventually
             // open the portal via `force_portal` above.
@@ -158,9 +162,9 @@ async fn no_creds_boot(mut nvs: Nvs<'_>, spawner: Spawner, wifi: wifi::WifiResou
     )
     .await
     {
-        Ok(creds) => {
+        Ok(config) => {
             // Save credentials to NVS
-            if let Err(e) = nvs.save_credentials(creds.ssid_str(), creds.password_str()) {
+            if let Err(e) = nvs.save_config(&config) {
                 led_send(LedCommand::SetAll(Color::RED));
                 error!("Failed to save WiFi credentials: {:?}", e);
             } else {

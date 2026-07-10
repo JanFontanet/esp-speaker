@@ -10,7 +10,7 @@ use esp_hal::rng::Rng;
 use esp_radio::wifi::{Config, Interface, WifiController, ap::AccessPointConfig};
 use static_cell::StaticCell;
 
-use super::{WifiCredentials, WifiError};
+use super::{DeviceConfig, WifiError};
 
 const AP_SSID: &str = "ESpeaker-Setup";
 const AP_IP: &str = "192.168.4.1";
@@ -36,7 +36,7 @@ pub async fn start_ap(
     controller: WifiController<'static>,
     device: Interface<'static>,
     handler: impl Fn(&str) -> &'static str,
-) -> Result<WifiCredentials, WifiError> {
+) -> Result<DeviceConfig, WifiError> {
     defmt::info!("wifi: starting AP '{}'", AP_SSID);
     static CONTROLLER: StaticCell<WifiController<'static>> = StaticCell::new();
     let controller = CONTROLLER.init(controller);
@@ -83,7 +83,7 @@ pub async fn start_ap(
 async fn serve_once(
     stack: Stack<'static>,
     handler: &impl Fn(&str) -> &'static str,
-) -> Result<Option<WifiCredentials>, WifiError> {
+) -> Result<Option<DeviceConfig>, WifiError> {
     let mut rx_buf = [0u8; 1536];
     let mut tx_buf = [0u8; 1536];
     let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
@@ -155,33 +155,37 @@ async fn serve_once(
     Ok(None)
 }
 
-/// Parse a URL-encoded POST body: `ssid=...&password=...`.
-fn parse_credentials(request: &str) -> Option<WifiCredentials> {
+/// Parse a URL-encoded POST body: `name=...&ssid=...&password=...`.
+fn parse_credentials(request: &str) -> Option<DeviceConfig> {
     let body = request.split("\r\n\r\n").nth(1)?;
 
     let mut ssid_enc = "";
     let mut password_enc = "";
+    let mut name_enc = "";
 
     for pair in body.split('&') {
         let mut kv = pair.splitn(2, '=');
         match (kv.next(), kv.next()) {
             (Some("ssid"), Some(v)) => ssid_enc = v,
             (Some("password"), Some(v)) => password_enc = v,
+            (Some("name"), Some(v)) => name_enc = v,
             _ => {}
         }
     }
 
     let ssid = url_decode::<32>(ssid_enc)?;
     let password = url_decode::<64>(password_enc)?;
+    let name = url_decode::<32>(name_enc)?;
 
     let ssid = core::str::from_utf8(&ssid).ok()?;
     let password = core::str::from_utf8(&password).ok()?;
+    let name = core::str::from_utf8(&name).ok()?;
 
     if ssid.is_empty() {
         return None;
     }
 
-    Some(WifiCredentials::new(ssid, password))
+    Some(DeviceConfig::new(ssid, password, name))
 }
 
 fn url_decode<const N: usize>(input: &str) -> Option<heapless::Vec<u8, N>> {

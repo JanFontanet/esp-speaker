@@ -13,11 +13,13 @@
 <body>
     <h1>ESpeaker WiFi Setup</h1>
     <form method="POST" action="/">
+        <label>Device name</label>
+        <input type="text" name="name" maxlength="32" placeholder="ESpeaker">
         <label>WiFi Network (SSID)</label>
         <input type="text" name="ssid" required maxlength="32">
         <label>Password</label>
         <input type="password" name="password" maxlength="64">
-        <button type="submit">Save & Connect</button>
+        <button type="submit">Save &amp; Connect</button>
     </form>
 </body>
 </html>

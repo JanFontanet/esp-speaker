@@ -8,7 +8,7 @@ use esp_hal::rng::Rng;
 use esp_radio::wifi::{Config, Interface, WifiController, sta::StationConfig};
 use static_cell::StaticCell;
 
-use super::{WifiCredentials, WifiError};
+use super::{DeviceConfig, WifiError};
 
 const DHCP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -23,17 +23,17 @@ pub async fn connect(
     spawner: &Spawner,
     controller: WifiController<'static>,
     device: Interface<'static>,
-    creds: &WifiCredentials,
+    creds: &DeviceConfig,
 ) -> Result<Stack<'static>, WifiError> {
-    defmt::info!("wifi: connecting to '{}'", creds.ssid_str());
+    defmt::info!("wifi: connecting to '{}'", creds.ssid());
     static CONTROLLER: StaticCell<WifiController<'static>> = StaticCell::new();
     let controller = CONTROLLER.init(controller);
 
     controller
         .set_config(&Config::Station(
             StationConfig::default()
-                .with_ssid(creds.ssid_str())
-                .with_password(String::from(creds.password_str())),
+                .with_ssid(creds.ssid())
+                .with_password(String::from(creds.password())),
         ))
         .map_err(|_| WifiError::StaConnectFailed)?;
 

@@ -4,10 +4,14 @@ use esp_bootloader_esp_idf::partitions::{self, Error as PartitionError, FlashReg
 use esp_hal::peripherals::FLASH;
 use esp_storage::FlashStorage;
 
-use crate::wifi::WifiCredentials;
+use crate::wifi::DeviceConfig;
 
-const WIFI_CREDENTIALS_OFFSET: u32 = 0;
-const CREDENTIALS_SIZE: usize = 100;
+const CONFIG_OFFSET: u32 = 0;
+/// Fixed-size flash record: [magic(2)][version(1)][postcard DeviceConfig...].
+/// A multiple of 4 (flash alignment), comfortably larger than the encoding.
+const CONFIG_SIZE: usize = 160;
+const CONFIG_MAGIC: u16 = 0xE59E;
+const CONFIG_VERSION: u8 = 1;
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -21,53 +25,6 @@ pub enum NvsError {
 impl From<PartitionError> for NvsError {
     fn from(e: PartitionError) -> Self {
         NvsError::Partition(e)
-    }
-}
-
-// ─── Serialization ───────────────────────────────────────────────────────────
-
-trait IntoBytes {
-    fn to_bytes(&self) -> [u8; 100];
-    fn from_bytes(bytes: &[u8; 100]) -> Result<Self, NvsError>
-    where
-        Self: Sized;
-}
-
-impl IntoBytes for WifiCredentials {
-    fn to_bytes(&self) -> [u8; CREDENTIALS_SIZE] {
-        // Serializa manualmente: [ssid_len (1B)][ssid (32B)][password_len (1B)][password (64B)]
-        let mut bytes = [0u8; CREDENTIALS_SIZE];
-        bytes[0] = self.ssid_len as u8;
-        bytes[1..33].copy_from_slice(&self.ssid);
-        bytes[33] = self.password_len as u8;
-        bytes[34..98].copy_from_slice(&self.password);
-        bytes
-    }
-
-    fn from_bytes(bytes: &[u8; CREDENTIALS_SIZE]) -> Result<Self, NvsError> {
-        let ssid_len = bytes[0] as usize;
-        let password_len = bytes[33] as usize;
-
-        if ssid_len > 32 || password_len > 64 {
-            return Err(NvsError::InvalidData);
-        }
-        // An empty SSID means the slot is unset/cleared (erased flash reads as
-        // all-ones -> rejected above; a wipe writes zeros -> rejected here).
-        if ssid_len == 0 {
-            return Err(NvsError::NotFound);
-        }
-
-        let mut ssid = [0u8; 32];
-        let mut password = [0u8; 64];
-        ssid[..ssid_len].copy_from_slice(&bytes[1..1 + ssid_len]);
-        password[..password_len].copy_from_slice(&bytes[34..34 + password_len]);
-
-        Ok(Self {
-            ssid,
-            password,
-            ssid_len,
-            password_len,
-        })
     }
 }
 
@@ -102,36 +59,48 @@ impl<'a> Nvs<'a> {
 
     // ── Public API ───────────────────────────────────────────────────────────
 
-    pub fn save_credentials(&mut self, ssid: &str, password: &str) -> Result<(), NvsError> {
-        let creds = WifiCredentials::new(ssid, password);
-        let bytes = creds.to_bytes();
+    pub fn save_config(&mut self, config: &DeviceConfig) -> Result<(), NvsError> {
+        let mut bytes = [0u8; CONFIG_SIZE];
+        bytes[0..2].copy_from_slice(&CONFIG_MAGIC.to_le_bytes());
+        bytes[2] = CONFIG_VERSION;
+        postcard::to_slice(config, &mut bytes[3..]).map_err(|_| NvsError::InvalidData)?;
 
         self.nvs_region()?
-            .write(WIFI_CREDENTIALS_OFFSET, &bytes)
+            .write(CONFIG_OFFSET, &bytes)
             .map_err(|_| NvsError::InvalidData)?;
 
-        defmt::info!("nvs: credentials saved");
+        defmt::info!("nvs: config saved");
         Ok(())
     }
 
-    pub fn load_credentials(&mut self) -> Result<WifiCredentials, NvsError> {
-        let mut bytes = [0u8; CREDENTIALS_SIZE];
+    pub fn load_config(&mut self) -> Result<DeviceConfig, NvsError> {
+        let mut bytes = [0u8; CONFIG_SIZE];
 
         self.nvs_region()?
-            .read(WIFI_CREDENTIALS_OFFSET, &mut bytes)
+            .read(CONFIG_OFFSET, &mut bytes)
             .map_err(|_| NvsError::InvalidData)?;
 
-        let creds = WifiCredentials::from_bytes(&bytes)?;
-        defmt::info!("nvs: credentials loaded");
-        Ok(creds)
+        // Reject unset/cleared flash and any older/foreign record layout.
+        if u16::from_le_bytes([bytes[0], bytes[1]]) != CONFIG_MAGIC || bytes[2] != CONFIG_VERSION {
+            return Err(NvsError::NotFound);
+        }
+
+        let (config, _) = postcard::take_from_bytes::<DeviceConfig>(&bytes[3..])
+            .map_err(|_| NvsError::InvalidData)?;
+        if config.ssid().is_empty() {
+            return Err(NvsError::NotFound);
+        }
+
+        defmt::info!("nvs: config loaded");
+        Ok(config)
     }
 
-    pub fn clear_credentials(&mut self) -> Result<(), NvsError> {
+    pub fn clear_config(&mut self) -> Result<(), NvsError> {
         self.nvs_region()?
-            .write(WIFI_CREDENTIALS_OFFSET, &[0u8; CREDENTIALS_SIZE])
+            .write(CONFIG_OFFSET, &[0u8; CONFIG_SIZE])
             .map_err(|_| NvsError::InvalidData)?;
 
-        defmt::info!("nvs: credentials cleared");
+        defmt::info!("nvs: config cleared");
         Ok(())
     }
 }
