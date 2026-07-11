@@ -47,7 +47,6 @@ impl Color {
         Self { r, g, b }
     }
 
-    /// Scale color by brightness (0-255)
     pub fn scale(self, brightness: u8) -> Self {
         let s = brightness as u16;
         Self {
@@ -57,7 +56,6 @@ impl Color {
         }
     }
 
-    /// Create color from HSV (hue 0-255, saturation 0-255, value 0-255)
     pub fn from_hsv(hue: u8, sat: u8, val: u8) -> Self {
         if sat == 0 {
             return Self::new(val, val, val);
@@ -99,7 +97,6 @@ impl<'d, const N: usize> LedController<'d, N> {
 
     // ── Simple API ────────────────────────────────────────────────────────────
 
-    /// Set a single LED color
     pub async fn set(&mut self, index: usize, color: Color) {
         if index < N {
             self.colors[index] = color.scale(self.brightness);
@@ -107,43 +104,36 @@ impl<'d, const N: usize> LedController<'d, N> {
         }
     }
 
-    /// Set all LEDs to the same color
     pub async fn set_all(&mut self, color: Color) {
         let scaled = color.scale(self.brightness);
         self.colors = [scaled; N];
         self.flush().await;
     }
 
-    /// Turn all LEDs off
     pub async fn clear(&mut self) {
         self.set_all(Color::BLACK).await;
     }
 
-    /// Set global brightness (0-255)
     pub fn set_brightness(&mut self, brightness: u8) {
         self.brightness = brightness;
     }
 
     // ── Animation API ─────────────────────────────────────────────────────────
 
-    /// Run animation once
     pub async fn animate_once(&mut self, animation: Animation) {
         animation.run_once(self).await;
     }
 
-    /// Run animation n times
     pub async fn animate_n(&mut self, animation: Animation, times: usize) {
         animation.run_n(self, times).await;
     }
 
-    /// Run animation forever (never returns)
     pub async fn animate(&mut self, animation: Animation) -> ! {
         animation.run_forever(self).await
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    /// Write raw colors without brightness scaling
     pub(crate) async fn set_raw(&mut self, colors: &[Color; N]) {
         self.colors = *colors;
         self.flush().await;

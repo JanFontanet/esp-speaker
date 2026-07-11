@@ -11,12 +11,9 @@ use embassy_time::{Duration, Timer, with_timeout};
 const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
 const LOCAL_PORT: u16 = 50123;
-/// Seconds between the NTP epoch (1900-01-01) and the Unix epoch (1970-01-01).
 const NTP_UNIX_DELTA: u64 = 2_208_988_800;
-/// How often to re-sync once we're up.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(3600);
 
-/// Spawn the time task: sync once now, then periodically.
 pub fn time_spawn(spawner: &Spawner, stack: Stack<'static>, bus: &'static I2cBus) {
     spawner.spawn(time_task(stack, bus).unwrap());
 }
@@ -29,7 +26,6 @@ async fn time_task(stack: Stack<'static>, bus: &'static I2cBus) {
     }
 }
 
-/// Query SNTP and store the result in the RTC. Best-effort: logs on failure.
 pub async fn sync(stack: Stack<'static>, bus: &'static I2cBus) {
     match sntp_unix(stack).await {
         Ok(unix) => {
@@ -53,7 +49,6 @@ pub async fn sync(stack: Stack<'static>, bus: &'static I2cBus) {
     }
 }
 
-/// Query SNTP and return Unix time (seconds since 1970-01-01 UTC).
 async fn sntp_unix(stack: Stack<'static>) -> Result<u64, &'static str> {
     let addrs = stack
         .dns_query(NTP_SERVER, DnsQueryType::A)
@@ -85,7 +80,6 @@ async fn sntp_unix(stack: Stack<'static>) -> Result<u64, &'static str> {
         return Err("short SNTP response");
     }
 
-    // Transmit timestamp (seconds) is a big-endian u32 at bytes 40..44.
     let secs_1900 =
         u32::from_be_bytes([response[40], response[41], response[42], response[43]]) as u64;
     secs_1900
@@ -93,7 +87,6 @@ async fn sntp_unix(stack: Stack<'static>) -> Result<u64, &'static str> {
         .ok_or("invalid SNTP time")
 }
 
-/// Convert Unix seconds to a UTC calendar date (Howard Hinnant's algorithm).
 fn datetime_from_unix(unix: u64) -> DateTime {
     let days = (unix / 86_400) as i64;
     let secs = unix % 86_400;

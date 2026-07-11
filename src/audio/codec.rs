@@ -1,3 +1,6 @@
+// http://www.everest-semi.com/pdf/ES8311%20PB.pdf
+// https://www.ti.com/lit/ds/symlink/tca9555.pdf
+
 use crate::board::{AUDIO_SAMPLE_RATE, I2cBus};
 use embassy_time::{Duration, Timer};
 use es8311::{ClockConfig, Es8311, Resolution};
@@ -18,8 +21,6 @@ pub struct Codec {
 
 impl Codec {
     pub async fn init(bus: &'static I2cBus) -> Result<Self, &'static str> {
-        // Bring the codec up with the bus locked. This runs once at startup
-        // with no contention, so holding the lock for the whole sequence is fine.
         let codec = Es8311::new(ES8311_ADDR);
         let mut guard = bus.lock().await;
 
@@ -56,10 +57,6 @@ impl Codec {
             .volume_set(&mut *guard, 70, None)
             .map_err(|_| "ES8311 volume set failed")?;
 
-        // Start muted with the PA off. The audio task unmutes and powers the
-        // amplifier only while a sound is actually playing (see
-        // `set_output_enabled`), which avoids the boot clap and keeps the idle
-        // DAC noise floor from being amplified.
         codec
             .mute(&mut *guard, true)
             .map_err(|_| "ES8311 mute failed")?;
@@ -79,16 +76,11 @@ impl Codec {
     /// keeps power-up transients out of the audio.
     pub async fn set_output_enabled(&mut self, on: bool) {
         if on {
-            // Unmute the DAC first (still silent, PA is off), let it settle,
-            // then power the amplifier up into a stable output. Lock the bus
-            // only for each short transaction, never across the settle delays.
             let _ = self.es8311.mute(&mut *self.bus.lock().await, false);
             Timer::after(Duration::from_millis(10)).await;
             let _ = tca9555_pa_set(&mut *self.bus.lock().await, true);
             Timer::after(Duration::from_millis(30)).await;
         } else {
-            // Power the amplifier down first so the DAC-mute transient isn't
-            // amplified, then mute the DAC.
             let _ = tca9555_pa_set(&mut *self.bus.lock().await, false);
             Timer::after(Duration::from_millis(5)).await;
             let _ = self.es8311.mute(&mut *self.bus.lock().await, true);
@@ -101,12 +93,10 @@ fn tca9555_write_reg(i2c: &mut I2c<'_, Blocking>, reg: u8, val: u8) -> Result<()
         .map_err(|_| "TCA9555 write failed")
 }
 
-/// Configure the TCA9555 P10 pin (speaker PA enable) as an output.
 fn tca9555_pa_configure(i2c: &mut I2c<'_, Blocking>) -> Result<(), &'static str> {
     tca9555_write_reg(i2c, TCA9555_REG_CFG1, 0b1111_1110)
 }
 
-/// Drive the speaker PA enable pin (TCA9555 P10) high (on) or low (off).
 fn tca9555_pa_set(i2c: &mut I2c<'_, Blocking>, on: bool) -> Result<(), &'static str> {
     tca9555_write_reg(
         i2c,

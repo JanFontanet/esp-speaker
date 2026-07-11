@@ -12,7 +12,6 @@ pub enum Animation {
 }
 
 impl Animation {
-    /// Run animation once (one full cycle)
     pub async fn run_once<const N: usize>(&self, led: &mut LedController<'_, N>) {
         match self {
             Animation::Solid(color) => {
@@ -36,7 +35,6 @@ impl Animation {
             Animation::Pulse { color, speed } => {
                 let steps = 128u16;
                 let delay = Duration::from_millis(10u64.saturating_sub(*speed as u64 / 10));
-                // Fade in
                 for step in 0..steps {
                     let t = step as f32 / steps as f32;
                     let scale = (t * core::f32::consts::PI).sin();
@@ -44,7 +42,6 @@ impl Animation {
                     led.set_all(c).await;
                     Timer::after(delay).await;
                 }
-                // Fade out
                 for step in (0..steps).rev() {
                     let t = step as f32 / steps as f32;
                     let scale = (t * core::f32::consts::PI).sin();
@@ -59,7 +56,6 @@ impl Animation {
                 for i in 0..N {
                     let mut colors = [Color::BLACK; N];
                     colors[i] = color.scale(led.brightness);
-                    // Dim trail
                     if i > 0 {
                         colors[i - 1] = color.scale(led.brightness / 3);
                     }
@@ -70,10 +66,7 @@ impl Animation {
         }
     }
 
-    /// Run animation forever
     pub async fn run_forever<const N: usize>(&self, led: &mut LedController<'_, N>) -> ! {
-        // `Solid` has no frames to cycle, so set it once and then idle instead
-        // of busy-looping `run_once`.
         if let Animation::Solid(color) = self {
             led.set_all(*color).await;
             loop {
@@ -85,7 +78,6 @@ impl Animation {
         }
     }
 
-    /// Run animation n times
     pub async fn run_n<const N: usize>(&self, led: &mut LedController<'_, N>, times: usize) {
         for _ in 0..times {
             self.run_once(led).await;

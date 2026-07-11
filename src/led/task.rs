@@ -6,31 +6,22 @@ use super::{Animation, Color, LedController};
 use crate::board::LED_COUNT;
 use esp_hal::{gpio::AnyPin, peripherals::RMT};
 
-// Signal holds the latest command — a new command overwrites a pending one.
 static LED_SIGNAL: Signal<CriticalSectionRawMutex, LedCommand> = Signal::new();
 
 #[derive(Clone, Copy)]
 pub enum LedCommand {
-    /// Run animation once then stop
     Once(Animation),
-    /// Run animation forever until next command
     Loop(Animation),
-    /// Immediately set one LED
     Set(usize, Color),
-    /// Immediately set all LEDs
     SetAll(Color),
-    /// Turn off all LEDs
     Clear,
-    /// Set global brightness (0-255)
     Brightness(u8),
 }
 
-/// Send a command to the LED task — cancels any running animation
 pub fn led_send(command: LedCommand) {
     LED_SIGNAL.signal(command);
 }
 
-/// Spawn the LED task. Call once from main.
 pub fn led_spawn(spawner: &Spawner, rmt: RMT<'static>, pin: AnyPin<'static>) {
     spawner.spawn(led_task(rmt, pin).unwrap());
 }
@@ -39,8 +30,6 @@ pub fn led_spawn(spawner: &Spawner, rmt: RMT<'static>, pin: AnyPin<'static>) {
 async fn led_task(rmt: RMT<'static>, pin: AnyPin<'static>) {
     let mut led = LedController::<LED_COUNT>::new(rmt, pin);
 
-    // Block for the first command, then run each command until the next one
-    // arrives. `execute` returns the command that should run next.
     let mut command = LED_SIGNAL.wait().await;
     loop {
         command = execute(&mut led, command).await;
@@ -51,8 +40,7 @@ async fn led_task(rmt: RMT<'static>, pin: AnyPin<'static>) {
 ///
 /// Long-running animations race against `LED_SIGNAL`: when a new command
 /// arrives the animation future is dropped at its current `.await` point,
-/// giving clean, poll-free cancellation. The animation stepping logic lives in
-/// a single place (`animations.rs`) and is not duplicated here.
+/// giving clean, poll-free cancellation.
 async fn execute<const N: usize>(
     led: &mut LedController<'_, N>,
     command: LedCommand,
@@ -76,9 +64,7 @@ async fn execute<const N: usize>(
         }
         LedCommand::Once(animation) => {
             match select(animation.run_once(led), LED_SIGNAL.wait()).await {
-                // Finished a single cycle — idle until the next command.
                 Either::First(()) => LED_SIGNAL.wait().await,
-                // Interrupted by a new command.
                 Either::Second(next) => next,
             }
         }

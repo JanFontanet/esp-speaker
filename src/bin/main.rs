@@ -39,13 +39,11 @@ esp_bootloader_esp_idf::esp_app_desc!();
 async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
+    let board = Board::new(peripherals);
 
     // -------------- Initializing embassy ----------------
     esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64 * 1024);
     esp_alloc::heap_allocator!(size: 36 * 1024);
-
-    // Split raw peripherals into named board resources (see board.rs).
-    let board = Board::new(peripherals);
 
     let timg0 = TimerGroup::new(board.timg0);
     let sw_interrupt =
@@ -54,12 +52,6 @@ async fn main(spawner: Spawner) -> ! {
     // -------------- Embassy initialized ----------------
     info!("Start Rock&Roll!");
 
-    let mut nvs = Nvs::new(board.flash);
-    led_spawn(&spawner, board.rmt, board.led_pin);
-    button_spawn(&spawner, board.boot_button);
-
-    // Build the shared I2C bus once and hand out `&'static` references to every
-    // device that lives on it (codec now, RTC below, ES7210 mic later).
     let i2c = I2c::new(board.i2c0, I2cConfig::default())
         .unwrap()
         .with_sda(board.i2c_sda)
@@ -67,6 +59,9 @@ async fn main(spawner: Spawner) -> ! {
     static I2C_BUS: StaticCell<I2cBus> = StaticCell::new();
     let i2c_bus: &'static I2cBus = I2C_BUS.init(Mutex::new(i2c));
 
+    let mut nvs = Nvs::new(board.flash);
+    led_spawn(&spawner, board.rmt, board.led_pin);
+    button_spawn(&spawner, board.boot_button);
     audio_spawn(&spawner, board.audio, i2c_bus);
 
     led_send(LedCommand::Brightness(10));
@@ -75,16 +70,15 @@ async fn main(spawner: Spawner) -> ! {
         speed: 2,
     }));
 
-    // A long BOOT-button press (see button_task) requests a wipe via a
-    // persistent flag and reboots; honor it here now that we own the flash.
+    // ---------------- Factory reset requested! ---------------
     if boot::take_factory_reset() {
         info!("Factory reset: clearing stored WiFi credentials");
         let _ = nvs.clear_config();
         boot::set_sta_fail_count(0);
     }
 
-    // After too many consecutive failed connects, stop retrying (likely-bad)
-    // credentials and drop into the config portal instead of reboot-looping.
+    // User AP may be down or he moved, requesting config again,
+    // user can reset to try again with existing config
     let force_portal = boot::sta_fail_count() >= boot::MAX_STA_FAILS;
     if force_portal {
         warn!(
@@ -109,9 +103,7 @@ async fn main(spawner: Spawner) -> ! {
                 creds.name(),
                 creds.ssid()
             );
-            // Count this attempt. It's cleared on success but persists across
-            // the reboot we do on failure, so repeated failures eventually
-            // open the portal via `force_portal` above.
+            // Count this attempts since it is cleared on success.
             boot::set_sta_fail_count(boot::sta_fail_count() + 1);
             match wifi::sta::connect(&spawner, wifi.controller, wifi.interfaces.station, &creds)
                 .await
@@ -120,6 +112,7 @@ async fn main(spawner: Spawner) -> ! {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
                     ready().await;
+                    esp_hal::system::software_reset(); // unreachable, but vscode complains
                 }
                 Err(e) => {
                     error!("WiFi connect failed: {:?}; rebooting to retry", e);
@@ -138,7 +131,6 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-/// Steady state once the network is up. Never returns.
 async fn ready() -> ! {
     defmt::info!("Ready! Stack is up.");
     led_send(LedCommand::Clear);
@@ -153,7 +145,7 @@ async fn no_creds_boot(mut nvs: Nvs<'_>, spawner: Spawner, wifi: wifi::WifiResou
         color: Color::BLUE,
         speed: 5,
     }));
-    // Start AP mode to get credentials
+
     match wifi::ap::start_ap(
         &spawner,
         wifi.controller,
@@ -182,6 +174,6 @@ async fn no_creds_boot(mut nvs: Nvs<'_>, spawner: Spawner, wifi: wifi::WifiResou
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     defmt::error!("PANIC: {}", defmt::Display2Format(info));
-    // do something before reset, e.g. turn LEDs red
+    led_send(LedCommand::SetAll(Color::RED));
     esp_hal::system::software_reset();
 }

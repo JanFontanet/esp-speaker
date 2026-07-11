@@ -9,10 +9,12 @@ use esp_hal::{
 use super::Color;
 
 // WS2812 timing at 80MHz / divider 2 = 40MHz = 25ns per tick
+// https://cdn-shop.adafruit.com/datasheets/WS2812.pdf (TH + TL = 1.25µs+-600ns, reset >= 50µs)
 const T0H: u16 = 16; // 0.4µs
 const T0L: u16 = 34; // 0.85µs
 const T1H: u16 = 32; // 0.8µs
 const T1L: u16 = 18; // 0.45µs
+const TRESET: u16 = 2002; // 50.05µs
 
 const MAX_LEDS: usize = 16;
 const CODES_PER_LED: usize = 24;
@@ -60,8 +62,7 @@ impl<'d> Ws2812Driver<'d> {
             }
         }
 
-        // Reset pulse
-        pulses[N * CODES_PER_LED] = PulseCode::new(Level::Low, 2000, Level::Low, 2000);
+        pulses[N * CODES_PER_LED] = PulseCode::new(Level::Low, TRESET, Level::Low, TRESET);
 
         self.channel.transmit(&pulses[..total]).await
     }

@@ -43,8 +43,6 @@ impl<'a> Nvs<'a> {
         }
     }
 
-    /// Get the NVS flash region. Both flash and pt_mem live in self,
-    /// so no lifetime issues.
     fn nvs_region(&mut self) -> Result<FlashRegion<'_, FlashStorage<'a>>, NvsError> {
         let pt = partitions::read_partition_table(&mut self.flash, &mut self.pt_mem)?;
 

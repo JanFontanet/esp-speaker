@@ -1,14 +1,11 @@
 //! Minimal PCF85063 RTC driver (on the shared I2C bus).
-//!
-//! Only what we need: set and read wall-clock time in 24-hour mode. Time is
-//! stored on-chip in BCD; with an RTC backup battery it survives power loss.
+//! https://www.nxp.com/docs/en/data-sheet/PCF85063A.pdf
 
 use crate::board::I2cBus;
 
 const PCF85063_ADDR: u8 = 0x51;
 const REG_SECONDS: u8 = 0x04; // seconds..years are 7 consecutive BCD registers
 
-/// A wall-clock date/time (UTC).
 #[derive(Clone, Copy, defmt::Format)]
 pub struct DateTime {
     pub year: u16, // full year, e.g. 2026
@@ -28,7 +25,6 @@ impl Rtc {
         Self { bus }
     }
 
-    /// Write the given time to the RTC.
     pub async fn set(&mut self, dt: &DateTime) -> Result<(), &'static str> {
         let payload = [
             REG_SECONDS,
@@ -45,7 +41,6 @@ impl Rtc {
             .map_err(|_| "RTC write failed")
     }
 
-    /// Read the current time from the RTC.
     pub async fn get(&mut self) -> Result<DateTime, &'static str> {
         let mut buf = [0u8; 7];
         {
