@@ -4,6 +4,7 @@ pub mod board;
 pub mod boot;
 pub mod button;
 pub mod led;
+pub mod mqtt;
 pub mod nvs;
 pub mod rtc;
 pub mod time;

@@ -40,7 +40,7 @@ pub async fn start_ap(
     defmt::info!("wifi: starting AP '{}'", AP_SSID);
     static CONTROLLER: StaticCell<WifiController<'static>> = StaticCell::new();
     let controller = CONTROLLER.init(controller);
-    // Configure AP on existing controller
+
     controller
         .set_config(&Config::AccessPoint(
             AccessPointConfig::default().with_ssid(AP_SSID),
@@ -162,6 +162,9 @@ fn parse_credentials(request: &str) -> Option<DeviceConfig> {
     let mut ssid_enc = "";
     let mut password_enc = "";
     let mut name_enc = "";
+    let mut mqtt_address_enc = "";
+    let mut mqtt_user_enc = "";
+    let mut mqtt_pwd_enc = "";
 
     for pair in body.split('&') {
         let mut kv = pair.splitn(2, '=');
@@ -169,6 +172,9 @@ fn parse_credentials(request: &str) -> Option<DeviceConfig> {
             (Some("ssid"), Some(v)) => ssid_enc = v,
             (Some("password"), Some(v)) => password_enc = v,
             (Some("name"), Some(v)) => name_enc = v,
+            (Some("mqtt_address"), Some(v)) => mqtt_address_enc = v,
+            (Some("mqtt_user"), Some(v)) => mqtt_user_enc = v,
+            (Some("mqtt_pwd"), Some(v)) => mqtt_pwd_enc = v,
             _ => {}
         }
     }
@@ -176,16 +182,29 @@ fn parse_credentials(request: &str) -> Option<DeviceConfig> {
     let ssid = url_decode::<32>(ssid_enc)?;
     let password = url_decode::<64>(password_enc)?;
     let name = url_decode::<32>(name_enc)?;
+    let mqtt_address = url_decode::<32>(mqtt_address_enc)?;
+    let mqtt_user = url_decode::<32>(mqtt_user_enc)?;
+    let mqtt_pwd = url_decode::<64>(mqtt_pwd_enc)?;
 
     let ssid = core::str::from_utf8(&ssid).ok()?;
     let password = core::str::from_utf8(&password).ok()?;
     let name = core::str::from_utf8(&name).ok()?;
+    let mqtt_address = core::str::from_utf8(&mqtt_address).ok()?;
+    let mqtt_user = core::str::from_utf8(&mqtt_user).ok()?;
+    let mqtt_pwd = core::str::from_utf8(&mqtt_pwd).ok()?;
 
     if ssid.is_empty() {
         return None;
     }
 
-    Some(DeviceConfig::new(ssid, password, name))
+    Some(DeviceConfig::new(
+        ssid,
+        password,
+        name,
+        mqtt_address,
+        mqtt_user,
+        mqtt_pwd,
+    ))
 }
 
 fn url_decode<const N: usize>(input: &str) -> Option<heapless::Vec<u8, N>> {

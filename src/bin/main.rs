@@ -23,6 +23,7 @@ use espeaker::{
     boot,
     button::button_spawn,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
+    mqtt,
     nvs::{Nvs, NvsError},
     time, wifi,
 };
@@ -111,6 +112,7 @@ async fn main(spawner: Spawner) -> ! {
                 Ok(stack) => {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
+                    mqtt::mqtt_spawn(&spawner, stack, &creds);
                     ready().await;
                     esp_hal::system::software_reset(); // unreachable, but vscode complains
                 }

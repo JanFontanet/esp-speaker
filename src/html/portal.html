@@ -11,14 +11,22 @@
     </style>
 </head>
 <body>
-    <h1>ESpeaker WiFi Setup</h1>
+    <h1>ESpeaker Setup</h1>
     <form method="POST" action="/">
         <label>Device name</label>
         <input type="text" name="name" maxlength="32" placeholder="ESpeaker">
+        <hr/>
         <label>WiFi Network (SSID)</label>
         <input type="text" name="ssid" required maxlength="32">
         <label>Password</label>
         <input type="password" name="password" maxlength="64">
+        <hr/>
+        <label>MQTT address</label>
+        <input type="text" name="mqtt_address"/>
+        <label>MQTT username</label>
+        <input type="text" name="mqtt_user"/>
+        <label>MQTT password</label>
+        <input type="text" name="mqtt_pwd" />
         <button type="submit">Save &amp; Connect</button>
     </form>
 </body>
