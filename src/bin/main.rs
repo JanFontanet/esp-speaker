@@ -113,8 +113,7 @@ async fn main(spawner: Spawner) -> ! {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
                     mqtt::mqtt_spawn(&spawner, stack, &creds);
-                    ready().await;
-                    esp_hal::system::software_reset(); // unreachable, but vscode complains
+                    ready().await
                 }
                 Err(e) => {
                     error!("WiFi connect failed: {:?}; rebooting to retry", e);
