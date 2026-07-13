@@ -1,3 +1,8 @@
+use crate::config::{
+    AP_EVENT_POLL_INTERVAL_MS, AP_IP, AP_PORT, AP_SERVE_CLOSE_DELAY_MS, AP_SOCKET_TIMEOUT_SECS,
+    AP_SSID, AP_SUBNET_PREFIX_LEN,
+};
+
 use core::{net::Ipv4Addr, str::FromStr};
 
 use embassy_executor::Spawner;
@@ -11,10 +16,6 @@ use esp_radio::wifi::{Config, Interface, WifiController, ap::AccessPointConfig};
 use static_cell::StaticCell;
 
 use super::{DeviceConfig, WifiError};
-
-const AP_SSID: &str = "ESpeaker-Setup";
-const AP_IP: &str = "192.168.4.1";
-const AP_PORT: u16 = 80;
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -50,7 +51,7 @@ pub async fn start_ap(
     let gw_ip = Ipv4Addr::from_str(AP_IP).unwrap();
 
     let net_config = embassy_net::Config::ipv4_static(StaticConfigV4 {
-        address: Ipv4Cidr::new(gw_ip, 24),
+        address: Ipv4Cidr::new(gw_ip, AP_SUBNET_PREFIX_LEN),
         gateway: Some(gw_ip),
         dns_servers: Default::default(),
     });
@@ -87,7 +88,7 @@ async fn serve_once(
     let mut rx_buf = [0u8; 1536];
     let mut tx_buf = [0u8; 1536];
     let mut socket = TcpSocket::new(stack, &mut rx_buf, &mut tx_buf);
-    socket.set_timeout(Some(Duration::from_secs(10)));
+    socket.set_timeout(Some(Duration::from_secs(AP_SOCKET_TIMEOUT_SECS as u64)));
 
     defmt::info!("wifi: waiting for connection on port {}", AP_PORT);
     socket
@@ -131,7 +132,7 @@ async fn serve_once(
                 .await
                 .map_err(|_| WifiError::SocketError)?;
             socket.flush().await.map_err(|_| WifiError::SocketError)?;
-            Timer::after(Duration::from_millis(500)).await;
+            Timer::after(Duration::from_millis(AP_SERVE_CLOSE_DELAY_MS)).await;
             socket.close();
             return Ok(Some(creds));
         }
@@ -149,7 +150,7 @@ async fn serve_once(
         .await
         .map_err(|_| WifiError::SocketError)?;
     socket.flush().await.map_err(|_| WifiError::SocketError)?;
-    Timer::after(Duration::from_millis(500)).await;
+    Timer::after(Duration::from_millis(AP_SERVE_CLOSE_DELAY_MS)).await;
     socket.close();
 
     Ok(None)
@@ -278,7 +279,7 @@ async fn ap_wifi_task(controller: &'static mut WifiController<'static>) {
                 defmt::warn!("wifi: AP event error");
             }
         }
-        Timer::after(Duration::from_millis(5000)).await;
+        Timer::after(Duration::from_millis(AP_EVENT_POLL_INTERVAL_MS)).await;
     }
 }
 
@@ -313,6 +314,6 @@ async fn ap_dhcp_task(stack: Stack<'static>, gw_ip_str: &'static str) {
             &mut buf,
         )
         .await;
-        Timer::after(Duration::from_millis(500)).await;
+        Timer::after(Duration::from_millis(AP_SERVE_CLOSE_DELAY_MS)).await;
     }
 }

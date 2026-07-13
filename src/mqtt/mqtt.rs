@@ -20,11 +20,14 @@ use rust_mqtt::{
     },
 };
 
+use crate::config::{
+    CHANNEL_SIZE, MQTT_KEEPALIVE_SECS, MQTT_PORT, MQTT_RECONNECT_DELAY_SECS,
+    MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS, MQTT_TOPIC_COMMANDS,
+    MQTT_TOPIC_STATUS, MQTT_TOPIC_VOLUME,
+};
 use crate::mqtt::msg_protocol::{AppEvent, AudioCommand};
 use crate::wifi::DeviceConfig;
 
-// Define constants matching your channel configs
-pub const CHANNEL_SIZE: usize = 8;
 pub type CmdSender = Sender<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>;
 pub type EventReceiver<AppEvent> =
     Receiver<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>;
@@ -90,7 +93,7 @@ pub fn mqtt_spawn(
     event_rx: EventReceiver<AppEvent>,
 ) {
     let mqtt_address: Ipv4Addr = config.mqtt_address().parse().unwrap();
-    let addr = SocketAddr::new(mqtt_address.into(), 1883);
+    let addr = SocketAddr::new(mqtt_address.into(), MQTT_PORT);
 
     spawner.spawn(mqtt_task(stack, addr, cmd_tx, event_rx).unwrap());
 }
@@ -105,7 +108,7 @@ async fn mqtt_task(
     loop {
         if let Err(_e) = run_mqtt(stack, mqtt_address, &cmd_tx, &event_rx).await {
             defmt::error!("MQTT error, reconnecting in 5s...");
-            Timer::after(Duration::from_secs(5)).await;
+            Timer::after(Duration::from_secs(MQTT_RECONNECT_DELAY_SECS as u64)).await;
         }
     }
 }
@@ -119,7 +122,7 @@ async fn run_mqtt(
     let mut rx_buffer = [0u8; 4096];
     let mut tx_buffer = [0u8; 4096];
     let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-    socket.set_timeout(Some(Duration::from_secs(10)));
+    socket.set_timeout(Some(Duration::from_secs(MQTT_SOCKET_TIMEOUT_SECS as u64)));
 
     if let SocketAddr::V4(addr) = mqtt_address {
         let ip = addr.ip().octets();
@@ -148,8 +151,8 @@ async fn run_mqtt(
             &mut socket,
             &ConnectOptions::new()
                 .clean_start()
-                .session_expiry_interval(SessionExpiryInterval::Seconds(60))
-                .keep_alive(KeepAlive::Seconds(NonZero::new(30).unwrap())),
+                .session_expiry_interval(SessionExpiryInterval::Seconds(MQTT_SESSION_EXPIRY_SECS))
+                .keep_alive(KeepAlive::Seconds(NonZero::new(MQTT_KEEPALIVE_SECS).unwrap())),
             None, // client identifier
         )
         .await
@@ -161,7 +164,7 @@ async fn run_mqtt(
         }
     }
 
-    let command_topic = TopicName::new(MqttString::from_str("speaker/commands").unwrap()).unwrap();
+    let command_topic = TopicName::new(MqttString::from_str(MQTT_TOPIC_COMMANDS).unwrap()).unwrap();
     client
         .subscribe(
             command_topic.as_borrowed().into(),
@@ -199,7 +202,7 @@ async fn run_mqtt(
             Either::Second(app_event) => match app_event {
                 AppEvent::PlaybackStarted => {
                     let topic =
-                        TopicName::new(MqttString::from_str("speaker/status").unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(MQTT_TOPIC_STATUS).unwrap()).unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
@@ -209,7 +212,7 @@ async fn run_mqtt(
                 }
                 AppEvent::PlaybackStopped => {
                     let topic =
-                        TopicName::new(MqttString::from_str("speaker/status").unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(MQTT_TOPIC_STATUS).unwrap()).unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
@@ -219,7 +222,7 @@ async fn run_mqtt(
                 }
                 AppEvent::VolumeChanged(vol) => {
                     let topic =
-                        TopicName::new(MqttString::from_str("speaker/volume").unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(MQTT_TOPIC_VOLUME).unwrap()).unwrap();
 
                     let _ = client
                         .publish(

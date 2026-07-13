@@ -1,7 +1,11 @@
 // http://www.everest-semi.com/pdf/ES8311%20PB.pdf
 // https://www.ti.com/lit/ds/symlink/tca9555.pdf
 
-use crate::board::{AUDIO_SAMPLE_RATE, I2cBus};
+use crate::board::I2cBus;
+use crate::config::{
+    AUDIO_SAMPLE_RATE, CODEC_AMP_OFF_MUTE_DELAY_MS, CODEC_AMP_ON_PLAY_DELAY_MS,
+    CODEC_UNMUTE_AMP_ON_DELAY_MS, DEFAULT_VOLUME,
+};
 use embassy_time::{Duration, Timer};
 use es8311::{ClockConfig, Es8311, Resolution};
 use esp_hal::{Blocking, delay::Delay, i2c::master::I2c};
@@ -54,7 +58,7 @@ impl Codec {
             })?;
 
         codec
-            .volume_set(&mut *guard, 70, None)
+            .volume_set(&mut *guard, DEFAULT_VOLUME, None)
             .map_err(|_| "ES8311 volume set failed")?;
 
         codec
@@ -77,12 +81,12 @@ impl Codec {
     pub async fn set_output_enabled(&mut self, on: bool) {
         if on {
             let _ = self.es8311.mute(&mut *self.bus.lock().await, false);
-            Timer::after(Duration::from_millis(10)).await;
+            Timer::after(Duration::from_millis(CODEC_AMP_OFF_MUTE_DELAY_MS)).await;
             let _ = tca9555_pa_set(&mut *self.bus.lock().await, true);
-            Timer::after(Duration::from_millis(30)).await;
+            Timer::after(Duration::from_millis(CODEC_UNMUTE_AMP_ON_DELAY_MS)).await;
         } else {
             let _ = tca9555_pa_set(&mut *self.bus.lock().await, false);
-            Timer::after(Duration::from_millis(5)).await;
+            Timer::after(Duration::from_millis(CODEC_AMP_ON_PLAY_DELAY_MS)).await;
             let _ = self.es8311.mute(&mut *self.bus.lock().await, true);
         }
     }

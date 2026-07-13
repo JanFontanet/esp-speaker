@@ -1,6 +1,7 @@
 //! SNTP time sync: fetch UTC over the network and store it in the RTC.
 
 use crate::board::I2cBus;
+use crate::config::{NTP_RESYNC_INTERVAL_SECS, NTP_SERVER, SNTP_TIMEOUT_SECS};
 use crate::rtc::{DateTime, Rtc};
 use embassy_executor::Spawner;
 use embassy_net::dns::DnsQueryType;
@@ -8,11 +9,9 @@ use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpEndpoint, Stack};
 use embassy_time::{Duration, Timer, with_timeout};
 
-const NTP_SERVER: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
 const LOCAL_PORT: u16 = 50123;
 const NTP_UNIX_DELTA: u64 = 2_208_988_800;
-const RESYNC_INTERVAL: Duration = Duration::from_secs(3600);
 
 pub fn time_spawn(spawner: &Spawner, stack: Stack<'static>, bus: &'static I2cBus) {
     spawner.spawn(time_task(stack, bus).unwrap());
@@ -22,7 +21,7 @@ pub fn time_spawn(spawner: &Spawner, stack: Stack<'static>, bus: &'static I2cBus
 async fn time_task(stack: Stack<'static>, bus: &'static I2cBus) {
     loop {
         sync(stack, bus).await;
-        Timer::after(RESYNC_INTERVAL).await;
+        Timer::after(Duration::from_secs(NTP_RESYNC_INTERVAL_SECS)).await;
     }
 }
 
@@ -72,10 +71,13 @@ async fn sntp_unix(stack: Stack<'static>) -> Result<u64, &'static str> {
         .map_err(|_| "UDP send failed")?;
 
     let mut response = [0u8; 48];
-    let (n, _) = with_timeout(Duration::from_secs(5), socket.recv_from(&mut response))
-        .await
-        .map_err(|_| "SNTP timeout")?
-        .map_err(|_| "UDP recv failed")?;
+    let (n, _) = with_timeout(
+        Duration::from_secs(SNTP_TIMEOUT_SECS),
+        socket.recv_from(&mut response),
+    )
+    .await
+    .map_err(|_| "SNTP timeout")?
+    .map_err(|_| "UDP recv failed")?;
     if n < 48 {
         return Err("short SNTP response");
     }

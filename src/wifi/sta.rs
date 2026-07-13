@@ -9,8 +9,7 @@ use esp_radio::wifi::{Config, Interface, WifiController, sta::StationConfig};
 use static_cell::StaticCell;
 
 use super::{DeviceConfig, WifiError};
-
-const DHCP_TIMEOUT: Duration = Duration::from_secs(15);
+use crate::config::{DHCP_TIMEOUT_SECS, STA_RECONNECT_DELAY_SECS};
 
 macro_rules! mk_static {
     ($t:ty, $val:expr) => {{
@@ -52,9 +51,12 @@ pub async fn connect(
 
     // Wait for DHCP
     defmt::info!("wifi: waiting for DHCP...");
-    embassy_time::with_timeout(DHCP_TIMEOUT, stack.wait_config_up())
-        .await
-        .map_err(|_| WifiError::DhcpFailed)?;
+    embassy_time::with_timeout(
+        Duration::from_secs(DHCP_TIMEOUT_SECS),
+        stack.wait_config_up(),
+    )
+    .await
+    .map_err(|_| WifiError::DhcpFailed)?;
 
     let config = stack.config_v4().unwrap();
     let addr = config.address.address();
@@ -92,6 +94,6 @@ async fn sta_wifi_task(controller: &'static mut WifiController<'static>) {
                 defmt::warn!("wifi: connect failed, retrying in 5s...");
             }
         }
-        Timer::after(Duration::from_secs(5)).await;
+        Timer::after(Duration::from_secs(STA_RECONNECT_DELAY_SECS)).await;
     }
 }

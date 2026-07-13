@@ -8,13 +8,11 @@ use embassy_sync::{
 use super::Audio;
 use crate::{
     board::{AudioResources, I2cBus},
-    mqtt::msg_protocol::AudioCommand,
+    config::{AUDIO_QUEUE_DEPTH, CHANNEL_SIZE},
+    mqtt::msg_protocol::{AppEvent, AudioCommand},
 };
-use crate::{config::CHANNEL_SIZE, mqtt::msg_protocol::AppEvent};
 
-const QUEUE_DEPTH: usize = 8;
-
-static AUDIO_CHANNEL: Channel<CriticalSectionRawMutex, Sound, QUEUE_DEPTH> = Channel::new();
+static AUDIO_CHANNEL: Channel<CriticalSectionRawMutex, Sound, AUDIO_QUEUE_DEPTH> = Channel::new();
 
 #[derive(Clone, Copy, defmt::Format)]
 pub enum Sound {

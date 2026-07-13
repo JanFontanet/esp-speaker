@@ -14,10 +14,6 @@ static mut STA_FAIL_COUNT: u32 = 0;
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
 static mut FACTORY_RESET: u32 = 0;
 
-/// After this many consecutive failed connects, boot into the config portal
-/// instead of retrying (likely-bad) stored credentials forever.
-pub const MAX_STA_FAILS: u32 = 3;
-
 pub fn sta_fail_count() -> u32 {
     unsafe { (&raw const STA_FAIL_COUNT).read() }
 }

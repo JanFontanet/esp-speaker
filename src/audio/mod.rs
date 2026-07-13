@@ -7,7 +7,8 @@ pub use task::{Sound, audio_send, audio_spawn};
 use codec::Codec;
 use sine::SineGenerator;
 
-use crate::board::{AUDIO_SAMPLE_RATE, AudioResources, I2cBus};
+use crate::board::{AudioResources, I2cBus};
+use crate::config::{AUDIO_DMA_BUF_SIZE, AUDIO_SAMPLE_RATE};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     Async, dma_buffers,
@@ -16,7 +17,7 @@ use esp_hal::{
 };
 use micromath::F32Ext;
 
-const DMA_BUF_SIZE: usize = 4096;
+const DMA_BUF_SIZE: usize = AUDIO_DMA_BUF_SIZE;
 
 #[derive(Debug, defmt::Format)]
 pub enum AudioError {

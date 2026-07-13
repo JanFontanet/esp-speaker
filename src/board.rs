@@ -18,9 +18,6 @@ use esp_hal::{
 /// Number of on-board WS2812 RGB LEDs (7-LED ring).
 pub const LED_COUNT: usize = 7;
 
-/// I2S playback sample rate, in Hz.
-pub const AUDIO_SAMPLE_RATE: u32 = 48_000;
-
 /// Shared I2C0 bus. Several on-board devices hang off it (ES8311 codec,
 /// TCA9555 expander, PCF85063 RTC, and later the ES7210 mic), so it is wrapped
 /// in an async mutex and shared by `&'static` reference between tasks.

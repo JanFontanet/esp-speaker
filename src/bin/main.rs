@@ -24,9 +24,10 @@ use espeaker::{
     board::{Board, I2cBus},
     boot,
     button::button_spawn,
+    config,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     mqtt::{
-        mqtt::{self, CHANNEL_SIZE, CmdSender, EventReceiver},
+        mqtt::{self, CmdSender, EventReceiver},
         msg_protocol::{AppEvent, AudioCommand},
     },
     nvs::{Nvs, NvsError},
@@ -37,10 +38,12 @@ use espeaker::{
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static CMD_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>> =
-    StaticCell::new();
-static EVENT_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>> =
-    StaticCell::new();
+static CMD_CHANNEL: StaticCell<
+    Channel<CriticalSectionRawMutex, AudioCommand, { config::CHANNEL_SIZE }>,
+> = StaticCell::new();
+static EVENT_CHANNEL: StaticCell<
+    Channel<CriticalSectionRawMutex, AppEvent, { config::CHANNEL_SIZE }>,
+> = StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -48,8 +51,8 @@ static EVENT_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, AppEvent, CHAN
 )]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
-    let peripherals = esp_hal::init(config);
+    let hal_config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
+    let peripherals = esp_hal::init(hal_config);
     let board = Board::new(peripherals);
 
     // -------------- Initializing embassy ----------------
@@ -82,7 +85,7 @@ async fn main(spawner: Spawner) -> ! {
     button_spawn(&spawner, board.boot_button); // TODO: we can use cmds & events here too
     audio_spawn(&spawner, board.audio, i2c_bus, cmd_rx, event_tx.clone());
 
-    led_send(LedCommand::Brightness(10));
+    led_send(LedCommand::Brightness(config::DEFAULT_LED_BRIGHTNESS));
     led_send(LedCommand::Loop(Animation::Chase {
         color: Color::GREEN,
         speed: 2,
@@ -97,7 +100,7 @@ async fn main(spawner: Spawner) -> ! {
 
     // User AP may be down or he moved, requesting config again,
     // user can reset to try again with existing config
-    let force_portal = boot::sta_fail_count() >= boot::MAX_STA_FAILS;
+    let force_portal = boot::sta_fail_count() >= config::MAX_STA_FAILS;
     if force_portal {
         warn!(
             "{} consecutive failed connects; starting config portal",
@@ -135,7 +138,7 @@ async fn main(spawner: Spawner) -> ! {
                 Err(e) => {
                     error!("WiFi connect failed: {:?}; rebooting to retry", e);
                     led_send(LedCommand::SetAll(Color::RED));
-                    Timer::after(Duration::from_secs(2)).await;
+                    Timer::after(Duration::from_secs(config::WIFI_FAIL_REBOOT_DELAY_SECS)).await;
                     esp_hal::system::software_reset();
                 }
             }
@@ -143,7 +146,7 @@ async fn main(spawner: Spawner) -> ! {
         Err(e) => {
             info!("No usable WiFi credentials ({:?}); starting portal", e);
             no_creds_boot(nvs, spawner, wifi).await;
-            Timer::after(Duration::from_secs(1)).await;
+            Timer::after(Duration::from_secs(config::PORTAL_REBOOT_DELAY_SECS)).await;
             esp_hal::system::software_reset();
         }
     }
@@ -154,7 +157,7 @@ async fn ready() -> ! {
     led_send(LedCommand::Clear);
     audio_send(Sound::Connected);
     loop {
-        Timer::after(Duration::from_secs(30)).await;
+        Timer::after(Duration::from_secs(config::IDLE_HEARTBEAT_INTERVAL_SECS)).await;
     }
 }
 
