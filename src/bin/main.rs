@@ -8,6 +8,8 @@
 #![deny(clippy::large_stack_frames)]
 use defmt::{error, info, warn};
 use embassy_executor::Spawner;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
@@ -23,7 +25,10 @@ use espeaker::{
     boot,
     button::button_spawn,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
-    mqtt,
+    mqtt::{
+        mqtt::{self, CHANNEL_SIZE, CmdSender, EventReceiver},
+        msg_protocol::{AppEvent, AudioCommand},
+    },
     nvs::{Nvs, NvsError},
     time, wifi,
 };
@@ -31,6 +36,11 @@ use espeaker::{
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+static CMD_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>> =
+    StaticCell::new();
+static EVENT_CHANNEL: StaticCell<Channel<CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>> =
+    StaticCell::new();
 
 #[allow(
     clippy::large_stack_frames,
@@ -53,6 +63,13 @@ async fn main(spawner: Spawner) -> ! {
     // -------------- Embassy initialized ----------------
     info!("Start Rock&Roll!");
 
+    let cmd_chan = CMD_CHANNEL.init(Channel::new());
+    let event_chan = EVENT_CHANNEL.init(Channel::new());
+    let cmd_tx: CmdSender = cmd_chan.sender();
+    let cmd_rx = cmd_chan.receiver();
+    let event_tx = event_chan.sender();
+    let event_rx: EventReceiver<AppEvent> = event_chan.receiver();
+
     let i2c = I2c::new(board.i2c0, I2cConfig::default())
         .unwrap()
         .with_sda(board.i2c_sda)
@@ -61,9 +78,9 @@ async fn main(spawner: Spawner) -> ! {
     let i2c_bus: &'static I2cBus = I2C_BUS.init(Mutex::new(i2c));
 
     let mut nvs = Nvs::new(board.flash);
-    led_spawn(&spawner, board.rmt, board.led_pin);
-    button_spawn(&spawner, board.boot_button);
-    audio_spawn(&spawner, board.audio, i2c_bus);
+    led_spawn(&spawner, board.rmt, board.led_pin); // TODO: we can use cmds & events here too
+    button_spawn(&spawner, board.boot_button); // TODO: we can use cmds & events here too
+    audio_spawn(&spawner, board.audio, i2c_bus, cmd_rx, event_tx.clone());
 
     led_send(LedCommand::Brightness(10));
     led_send(LedCommand::Loop(Animation::Chase {
@@ -112,7 +129,7 @@ async fn main(spawner: Spawner) -> ! {
                 Ok(stack) => {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
-                    mqtt::mqtt_spawn(&spawner, stack, &creds);
+                    mqtt::mqtt_spawn(&spawner, stack, &creds, cmd_tx, event_rx);
                     ready().await
                 }
                 Err(e) => {

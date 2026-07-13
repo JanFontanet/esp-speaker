@@ -3,6 +3,7 @@ pub mod audio;
 pub mod board;
 pub mod boot;
 pub mod button;
+pub mod config;
 pub mod led;
 pub mod mqtt;
 pub mod nvs;

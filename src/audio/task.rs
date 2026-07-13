@@ -1,8 +1,16 @@
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::Channel,
+    channel::{Receiver, Sender},
+};
 
 use super::Audio;
-use crate::board::{AudioResources, I2cBus};
+use crate::{
+    board::{AudioResources, I2cBus},
+    mqtt::msg_protocol::AudioCommand,
+};
+use crate::{config::CHANNEL_SIZE, mqtt::msg_protocol::AppEvent};
 
 const QUEUE_DEPTH: usize = 8;
 
@@ -25,12 +33,23 @@ pub fn audio_send(sound: Sound) {
     }
 }
 
-pub fn audio_spawn(spawner: &Spawner, res: AudioResources<'static>, bus: &'static I2cBus) {
-    spawner.spawn(audio_task(res, bus).unwrap());
+pub fn audio_spawn(
+    spawner: &Spawner,
+    res: AudioResources<'static>,
+    bus: &'static I2cBus,
+    cmd_rx: Receiver<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>,
+    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
+) {
+    spawner.spawn(audio_task(res, bus, cmd_rx, event_tx).unwrap());
 }
 
 #[embassy_executor::task]
-async fn audio_task(res: AudioResources<'static>, bus: &'static I2cBus) {
+async fn audio_task(
+    res: AudioResources<'static>,
+    bus: &'static I2cBus,
+    _cmd_rx: Receiver<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>,
+    _event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
+) {
     let mut audio = match Audio::new(res, bus).await {
         Ok(audio) => audio,
         Err(e) => {
@@ -40,6 +59,7 @@ async fn audio_task(res: AudioResources<'static>, bus: &'static I2cBus) {
     };
     defmt::info!("audio: task ready");
 
+    // TODO: React to commands received by any channel & send events
     loop {
         // Idle here with the amplifier powered down (no idle hiss).
         let sound = AUDIO_CHANNEL.receive().await;
