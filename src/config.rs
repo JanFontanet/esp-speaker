@@ -55,3 +55,34 @@ pub const AP_EVENT_POLL_INTERVAL_MS: u64 = 5000;
 pub const CODEC_UNMUTE_AMP_ON_DELAY_MS: u64 = 10;
 pub const CODEC_AMP_ON_PLAY_DELAY_MS: u64 = 30;
 pub const CODEC_AMP_OFF_MUTE_DELAY_MS: u64 = 5;
+
+/// Return a stable unique device identifier based on the factory base MAC
+/// address burned into eFuse at manufacturing (format: `ES-AABBCCDDEEFF`).
+///
+/// The returned `&'static str` lives forever — safe to pass across task
+/// boundaries and to `rust_mqtt::MqttString`.
+pub fn device_id() -> &'static str {
+    let mac = esp_hal::efuse::base_mac_address();
+    let bytes = mac.as_bytes(); // &[u8; 6]
+
+    static CELL: static_cell::StaticCell<[u8; 16]> = static_cell::StaticCell::new();
+    let buf = CELL.init([0u8; 16]);
+
+    let mut pos = 3;
+    for byte in bytes {
+        buf[pos] = hex_digit(byte >> 4);
+        buf[pos + 1] = hex_digit(byte & 0x0F);
+        pos += 2;
+    }
+
+    // SAFETY: we wrote only ASCII hex digits and '-', all valid UTF-8.
+    unsafe { core::str::from_utf8_unchecked(&buf[..pos]) }
+}
+
+const fn hex_digit(nibble: u8) -> u8 {
+    match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'A' + (nibble - 10),
+        _ => unreachable!(),
+    }
+}

@@ -22,8 +22,8 @@ use rust_mqtt::{
 
 use crate::config::{
     CHANNEL_SIZE, MQTT_KEEPALIVE_SECS, MQTT_PORT, MQTT_RECONNECT_DELAY_SECS,
-    MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS, MQTT_TOPIC_COMMANDS,
-    MQTT_TOPIC_STATUS, MQTT_TOPIC_VOLUME,
+    MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS, MQTT_TOPIC_COMMANDS, MQTT_TOPIC_STATUS,
+    MQTT_TOPIC_VOLUME,
 };
 use crate::mqtt::msg_protocol::{AppEvent, AudioCommand};
 use crate::wifi::DeviceConfig;
@@ -89,24 +89,26 @@ pub fn mqtt_spawn(
     spawner: &Spawner,
     stack: Stack<'static>,
     config: &DeviceConfig,
+    client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
 ) {
     let mqtt_address: Ipv4Addr = config.mqtt_address().parse().unwrap();
     let addr = SocketAddr::new(mqtt_address.into(), MQTT_PORT);
 
-    spawner.spawn(mqtt_task(stack, addr, cmd_tx, event_rx).unwrap());
+    spawner.spawn(mqtt_task(stack, addr, client_id, cmd_tx, event_rx).unwrap());
 }
 
 #[embassy_executor::task]
 async fn mqtt_task(
     stack: Stack<'static>,
     mqtt_address: SocketAddr,
+    client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
 ) {
     loop {
-        if let Err(_e) = run_mqtt(stack, mqtt_address, &cmd_tx, &event_rx).await {
+        if let Err(_e) = run_mqtt(stack, mqtt_address, client_id, &cmd_tx, &event_rx).await {
             defmt::error!("MQTT error, reconnecting in 5s...");
             Timer::after(Duration::from_secs(MQTT_RECONNECT_DELAY_SECS as u64)).await;
         }
@@ -116,6 +118,7 @@ async fn mqtt_task(
 async fn run_mqtt(
     stack: Stack<'static>,
     mqtt_address: SocketAddr,
+    client_id: &'static str,
     cmd_tx: &CmdSender,
     event_rx: &EventReceiver<AppEvent>,
 ) -> Result<(), ()> {
@@ -152,8 +155,10 @@ async fn run_mqtt(
             &ConnectOptions::new()
                 .clean_start()
                 .session_expiry_interval(SessionExpiryInterval::Seconds(MQTT_SESSION_EXPIRY_SECS))
-                .keep_alive(KeepAlive::Seconds(NonZero::new(MQTT_KEEPALIVE_SECS).unwrap())),
-            None, // client identifier
+                .keep_alive(KeepAlive::Seconds(
+                    NonZero::new(MQTT_KEEPALIVE_SECS).unwrap(),
+                )),
+            Some(MqttString::from_str(client_id).unwrap()),
         )
         .await
     {
