@@ -45,8 +45,8 @@ pub fn audio_spawn(
 async fn audio_task(
     res: AudioResources<'static>,
     bus: &'static I2cBus,
-    _cmd_rx: Receiver<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>,
-    _event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
+    cmd_rx: Receiver<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>,
+    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) {
     let mut audio = match Audio::new(res, bus).await {
         Ok(audio) => audio,

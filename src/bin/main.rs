@@ -17,6 +17,7 @@ use esp_hal::clock::CpuClock;
 use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
+use espeaker::config::PANIC_REBOOT_DELAY_SECS;
 use static_cell::StaticCell;
 
 use espeaker::{
@@ -133,15 +134,7 @@ async fn main(spawner: Spawner) -> ! {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
                     let device_id = config::device_id();
-                    mqtt::mqtt_spawn(
-                        &spawner,
-                        stack,
-                        &creds,
-                        device_id,
-                        cmd_tx,
-                        event_rx,
-                        event_tx.clone(),
-                    );
+                    mqtt::mqtt_spawn(&spawner, stack, &creds, device_id, cmd_tx, event_rx);
                     ready().await
                 }
                 Err(e) => {
@@ -205,5 +198,6 @@ async fn no_creds_boot(mut nvs: Nvs<'_>, spawner: Spawner, wifi: wifi::WifiResou
 fn panic(info: &core::panic::PanicInfo) -> ! {
     defmt::error!("PANIC: {}", defmt::Display2Format(info));
     led_send(LedCommand::SetAll(Color::RED));
+    embassy_time::block_for(Duration::from_secs(PANIC_REBOOT_DELAY_SECS));
     esp_hal::system::software_reset();
 }

@@ -3,7 +3,7 @@ use core::num::NonZero;
 use core::str::from_utf8;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
@@ -95,7 +95,6 @@ pub fn mqtt_spawn(
     client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
-    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) {
     let mqtt_address: Ipv4Addr = config.mqtt_address().parse().unwrap();
     let addr = SocketAddr::new(mqtt_address.into(), MQTT_PORT);
@@ -111,7 +110,7 @@ pub fn mqtt_spawn(
 
     spawner.spawn(
         mqtt_task(
-            stack, addr, mqtt_user, mqtt_pwd, client_id, cmd_tx, event_rx, event_tx,
+            stack, addr, mqtt_user, mqtt_pwd, client_id, cmd_tx, event_rx,
         )
         .unwrap(),
     );
@@ -126,7 +125,6 @@ async fn mqtt_task(
     client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
-    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) {
     loop {
         if let Err(_) = run_mqtt(
@@ -137,7 +135,6 @@ async fn mqtt_task(
             client_id,
             &cmd_tx,
             &event_rx,
-            event_tx,
         )
         .await
         {
@@ -155,7 +152,6 @@ async fn run_mqtt(
     client_id: &'static str,
     cmd_tx: &CmdSender,
     event_rx: &EventReceiver<AppEvent>,
-    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) -> Result<(), ()> {
     let mut rx_buffer = [0u8; 4096];
     let mut tx_buffer = [0u8; 4096];
@@ -223,9 +219,10 @@ async fn run_mqtt(
     loop {
         let network_fut = client.poll();
         let event_fut = event_rx.receive();
+        let ping_fut = Timer::after(Duration::from_secs((MQTT_KEEPALIVE_SECS - 5) as u64));
 
-        match select(network_fut, event_fut).await {
-            Either::First(Ok(Event::Publish(publish))) => {
+        match select3(network_fut, event_fut, ping_fut).await {
+            Either3::First(Ok(Event::Publish(publish))) => {
                 let topic = publish.topic.as_ref().as_str();
                 let payload = from_utf8(publish.message.as_bytes()).unwrap_or("");
                 defmt::info!("mqtt rx: [{}] {}", topic, payload);
@@ -243,14 +240,14 @@ async fn run_mqtt(
                     );
                 }
             }
-            Either::First(Ok(item)) => {
+            Either3::First(Ok(item)) => {
                 defmt::debug!("Received an uncontrolled Ok {}", item)
             }
-            Either::First(Err(e)) => {
+            Either3::First(Err(e)) => {
                 defmt::error!("mqtt: network poll error {}", e);
                 break;
             }
-            Either::Second(app_event) => match app_event {
+            Either3::Second(app_event) => match app_event {
                 AppEvent::PlaybackStarted => {
                     let topic_str = topics.status().unwrap();
                     let topic =
@@ -287,7 +284,13 @@ async fn run_mqtt(
                 }
                 _ => {}
             },
-            // _ => {}
+            Either3::Third(_) => {
+                defmt::debug!("mqtt: sending ping");
+                if let Err(e) = client.ping().await {
+                    defmt::error!("mqtt: ping failed {}", e);
+                    break;
+                }
+            }
         }
     }
 
