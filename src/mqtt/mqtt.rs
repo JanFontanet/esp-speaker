@@ -8,7 +8,6 @@ use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
 use embassy_time::{Duration, Timer};
-use heapless::String;
 use rust_mqtt::client::options::{PublicationOptions, SubscriptionOptions, TopicReference};
 use rust_mqtt::config::{KeepAlive, SessionExpiryInterval};
 use rust_mqtt::types::{MqttString, TopicFilter, TopicName};
@@ -22,68 +21,46 @@ use rust_mqtt::{
 };
 use static_cell::StaticCell;
 
+use crate::audio::AudioCommand;
 use crate::config::{
     CHANNEL_SIZE, MQTT_KEEPALIVE_SECS, MQTT_PORT, MQTT_RECONNECT_DELAY_SECS,
     MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS,
 };
-use crate::mqtt::msg_protocol::{AppEvent, AudioCommand, MQTTTopics};
+use crate::led::{Color, LedCommand, led_send};
+use crate::mqtt::msg_protocol::{AppEvent, MQTTTopics};
 use crate::wifi::DeviceConfig;
 
-pub type CmdSender = Sender<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>;
+pub type AudioCommandSender = Sender<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>;
 pub type EventReceiver<AppEvent> =
     Receiver<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>;
 
-#[macro_export]
-macro_rules! route_mqtt {
-    // 1. Entry point of the macro: processes a list of routing mappings
-    (
-        $topic:expr, $payload:expr, $cmd_tx:expr;
-        {
-            $( $mqtt_topic:literal => $variant:ident $( ( $parse_fn:path ) )? ),* $(,)?
-        }
-    ) => {
-        match $topic {
-            $(
-                // For each rule, we route to our internal helper arm (prefixed with @route)
-                $mqtt_topic => {
-                    $crate::route_mqtt!(
-                        @route
-                        $payload,
-                        $cmd_tx,
-                        $variant
-                        $( ( $parse_fn ) )?
-                    );
-                }
-            )*
-            _ => {
-                defmt::warn!("mqtt: unhandled topic '{}'", $topic);
-            }
-        }
-    };
-
-    // 2. Internal helper: Matches commands WITH a parsing function
-    ( @route $payload:expr, $cmd_tx:expr, $variant:ident ( $parse_fn:path ) ) => {
-        if let Some(parsed_val) = $parse_fn($payload) {
-            let cmd = AudioCommand::$variant(parsed_val);
-            let _ = $cmd_tx.send(cmd).await;
-        } else {
-            defmt::warn!(
-                "Failed to parse payload '{}' for command variant '{}'",
-                $payload,
-                stringify!($variant)
-            );
-        }
-    };
-
-    // 3. Internal helper: Matches simple commands (WITHOUT a parsing function)
-    ( @route $payload:expr, $cmd_tx:expr, $variant:ident ) => {
-        let _ = $cmd_tx.send(AudioCommand::$variant).await;
-    };
+pub struct CommandRouter {
+    audio_tx: AudioCommandSender,
 }
-#[derive(Debug, defmt::Format)]
-pub enum MQTTError {
-    ConnectionError,
-    SpawnError,
+
+impl CommandRouter {
+    pub fn new(audio_tx: AudioCommandSender) -> Self {
+        Self { audio_tx }
+    }
+
+    pub async fn dispatch(&self, path: &str, payload: &str) {
+        let Some((domain, operation)) = path.split_once('/') else {
+            defmt::warn!("mqtt: malformed command topic '{}'", path);
+            return;
+        };
+
+        match domain {
+            "audio" => match parse_audio_command(operation, payload) {
+                Some(command) => self.audio_tx.send(command).await,
+                None => defmt::warn!("mqtt: invalid audio command '{}': '{}'", operation, payload),
+            },
+            "led" => match parse_led_command(operation, payload) {
+                Some(command) => led_send(command),
+                None => defmt::warn!("mqtt: invalid LED command '{}': '{}'", operation, payload),
+            },
+            _ => defmt::warn!("mqtt: unknown command domain '{}'", domain),
+        }
+    }
 }
 
 static USER_CELL: StaticCell<heapless::String<32>> = StaticCell::new();
@@ -94,7 +71,7 @@ pub fn mqtt_spawn(
     stack: Stack<'static>,
     config: &DeviceConfig,
     client_id: &'static str,
-    cmd_tx: CmdSender,
+    audio_tx: AudioCommandSender,
     event_rx: EventReceiver<AppEvent>,
 ) {
     let mqtt_address: Ipv4Addr = config.mqtt_address().parse().unwrap();
@@ -111,7 +88,13 @@ pub fn mqtt_spawn(
 
     spawner.spawn(
         mqtt_task(
-            stack, addr, mqtt_user, mqtt_pwd, client_id, cmd_tx, event_rx,
+            stack,
+            addr,
+            mqtt_user,
+            mqtt_pwd,
+            client_id,
+            CommandRouter::new(audio_tx),
+            event_rx,
         )
         .unwrap(),
     );
@@ -124,7 +107,7 @@ async fn mqtt_task(
     mqtt_user: &'static str,
     mqtt_pwd: &'static str,
     client_id: &'static str,
-    cmd_tx: CmdSender,
+    command_router: CommandRouter,
     event_rx: EventReceiver<AppEvent>,
 ) {
     loop {
@@ -134,7 +117,7 @@ async fn mqtt_task(
             mqtt_user,
             mqtt_pwd,
             client_id,
-            &cmd_tx,
+            &command_router,
             &event_rx,
         )
         .await
@@ -151,7 +134,7 @@ async fn run_mqtt(
     mqtt_user: &'static str,
     mqtt_pwd: &'static str,
     client_id: &'static str,
-    cmd_tx: &CmdSender,
+    command_router: &CommandRouter,
     event_rx: &EventReceiver<AppEvent>,
 ) -> Result<(), ()> {
     let mut rx_buffer = [0u8; 4096];
@@ -228,17 +211,8 @@ async fn run_mqtt(
                 let payload = from_utf8(publish.message.as_bytes()).unwrap_or("");
                 defmt::info!("mqtt rx: [{}] {}", topic, payload);
 
-                if let Some(cmd) = topic.strip_prefix(topics.get_prefix().unwrap().as_str()) {
-                    route_mqtt!(
-                        cmd, payload, cmd_tx;
-                        {
-                            "audio/play"   => Play,
-                            "audio/pause"  => Pause,
-                            "audio/stop"   => Stop,
-                            "audio/volume" => SetVolume(parse_u8),
-                            "audio/stream" => PlayUrl(parse_str),
-                        }
-                    );
+                if let Some(path) = topic.strip_prefix(topics.get_prefix().unwrap().as_str()) {
+                    command_router.dispatch(path, payload).await;
                 }
             }
             Either3::First(Ok(item)) => {
@@ -334,17 +308,37 @@ async fn run_mqtt(
     Err(())
 }
 
-fn parse_u8(payload: &str) -> Option<u8> {
-    payload.parse::<u8>().ok()
+fn parse_audio_command(operation: &str, payload: &str) -> Option<AudioCommand> {
+    match operation {
+        "play" => Some(AudioCommand::Play),
+        "pause" => Some(AudioCommand::Pause),
+        "stop" => Some(AudioCommand::Stop),
+        "volume" => payload.parse().ok().map(AudioCommand::SetVolume),
+        "stream" => heapless::String::try_from(payload)
+            .ok()
+            .map(AudioCommand::PlayUrl),
+        _ => None,
+    }
 }
 
-static URL_BUFFER: StaticCell<String<256>> = StaticCell::new();
+fn parse_led_command(operation: &str, payload: &str) -> Option<LedCommand> {
+    match operation {
+        "clear" => Some(LedCommand::Clear),
+        "brightness" => payload.parse().ok().map(LedCommand::Brightness),
+        "color" => parse_color(payload).map(LedCommand::SetAll),
+        _ => None,
+    }
+}
 
-fn parse_str(payload: &str) -> Option<&'static str> {
-    let cell = URL_BUFFER
-        .try_init(String::try_from(payload).unwrap())
-        .map(|s| s.as_str())
-        .unwrap_or_else(|| unsafe { URL_BUFFER.uninit().assume_init_mut().as_str() });
+fn parse_color(payload: &str) -> Option<Color> {
+    let mut components = payload.split(',');
+    let red = components.next()?.parse().ok()?;
+    let green = components.next()?.parse().ok()?;
+    let blue = components.next()?.parse().ok()?;
 
-    Some(cell)
+    if components.next().is_some() {
+        return None;
+    }
+
+    Some(Color::new(red, green, blue))
 }

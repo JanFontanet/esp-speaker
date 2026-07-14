@@ -19,15 +19,15 @@ use espeaker::config::PANIC_REBOOT_DELAY_SECS;
 use static_cell::StaticCell;
 
 use espeaker::{
-    audio::{Sound, audio_send, audio_spawn},
+    audio::{AudioCommand, Sound, audio_send, audio_spawn},
     board::Board,
     boot,
     button::{boot_button_spawn, button_spawn},
     config,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     mqtt::{
-        mqtt::{self, CmdSender, EventReceiver},
-        msg_protocol::{AppEvent, AudioCommand},
+        mqtt::{self, AudioCommandSender, EventReceiver},
+        msg_protocol::AppEvent,
     },
     nvs::{Nvs, NvsError},
     time, wifi,
@@ -68,7 +68,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let cmd_chan = CMD_CHANNEL.init(Channel::new());
     let event_chan = EVENT_CHANNEL.init(Channel::new());
-    let cmd_tx: CmdSender = cmd_chan.sender();
+    let cmd_tx: AudioCommandSender = cmd_chan.sender();
     let cmd_rx = cmd_chan.receiver();
     let event_tx = event_chan.sender();
     let event_rx: EventReceiver<AppEvent> = event_chan.receiver();

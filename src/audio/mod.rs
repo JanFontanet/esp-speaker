@@ -2,7 +2,7 @@ pub mod codec;
 pub mod sine;
 pub mod task;
 
-pub use task::{Sound, audio_send, audio_spawn};
+pub use task::{AudioCommand, Sound, audio_send, audio_spawn};
 
 use codec::Codec;
 use sine::SineGenerator;

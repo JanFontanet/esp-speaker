@@ -5,15 +5,27 @@ use embassy_sync::{
     channel::Channel,
     channel::{Receiver, Sender},
 };
+use heapless::String;
 
 use super::Audio;
 use crate::{
     board::{AudioResources, I2cBus},
     config::{AUDIO_QUEUE_DEPTH, CHANNEL_SIZE},
-    mqtt::msg_protocol::{AppEvent, AudioCommand},
+    mqtt::msg_protocol::AppEvent,
 };
 
 static AUDIO_CHANNEL: Channel<CriticalSectionRawMutex, Sound, AUDIO_QUEUE_DEPTH> = Channel::new();
+
+pub const STREAM_URL_CAPACITY: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioCommand {
+    Play,
+    Pause,
+    Stop,
+    SetVolume(u8),
+    PlayUrl(String<STREAM_URL_CAPACITY>),
+}
 
 #[derive(Clone, Copy, defmt::Format)]
 pub enum Sound {
@@ -95,11 +107,13 @@ async fn audio_task(
                     let _ = event_tx.send(AppEvent::PlaybackStopped).await;
                     defmt::info!("Audio sent");
                 }
-                AudioCommand::Pause => todo!(),
-                AudioCommand::Stop => todo!(),
-                AudioCommand::SetVolume(_) => todo!(),
+                AudioCommand::Pause => defmt::warn!("audio: pause is not implemented"),
+                AudioCommand::Stop => defmt::warn!("audio: stop is not implemented"),
+                AudioCommand::SetVolume(_) => {
+                    defmt::warn!("audio: volume control is not implemented")
+                }
                 AudioCommand::PlayUrl(uri) => {
-                    defmt::info!("PlayUri received! {}", uri);
+                    defmt::info!("PlayUri received! {}", uri.as_str());
                 }
             },
         }
