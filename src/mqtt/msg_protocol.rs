@@ -11,6 +11,20 @@ pub enum AudioCommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedCommand {
+    On,
+    Off,
+    Color(u8, u8, u8),
+    Animate(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Commands {
+    Audio(AudioCommand),
+    Led(LedCommand),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEvent {
     // Coms
     KeepAlive,
@@ -19,6 +33,10 @@ pub enum AppEvent {
     PlaybackPaused,
     PlaybackStopped,
     VolumeChanged(u8),
+    // User actions
+    Key1Pressed,
+    Key2Pressed,
+    Key3Pressed,
     // Generic
     Error(&'static str),
 }
@@ -30,6 +48,11 @@ pub struct MQTTTopics {
 impl MQTTTopics {
     pub const fn new(device_id: &'static str) -> Self {
         Self { device_id }
+    }
+
+    #[cfg(test)]
+    pub fn button_press_topic(&self, button_id: u8) -> Result<String<64>, core::fmt::Error> {
+        self.button_press(button_id)
     }
 
     fn build_topic(&self, event: &str) -> Result<String<64>, core::fmt::Error> {
@@ -62,5 +85,17 @@ impl MQTTTopics {
             self.device_id, button_id
         )?;
         Ok(topic)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MQTTTopics;
+
+    #[test]
+    fn button_press_topic_uses_button_id() {
+        let topics = MQTTTopics::new("demo-device");
+        let topic = topics.button_press_topic(3).unwrap();
+        assert_eq!(topic.as_str(), "speaker/demo-device/button/3");
     }
 }

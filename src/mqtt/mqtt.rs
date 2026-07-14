@@ -8,6 +8,7 @@ use embassy_net::{Stack, tcp::TcpSocket};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::{Receiver, Sender};
 use embassy_time::{Duration, Timer};
+use heapless::String;
 use rust_mqtt::client::options::{PublicationOptions, SubscriptionOptions, TopicReference};
 use rust_mqtt::config::{KeepAlive, SessionExpiryInterval};
 use rust_mqtt::types::{MqttString, TopicFilter, TopicName};
@@ -282,6 +283,39 @@ async fn run_mqtt(
                         )
                         .await;
                 }
+                AppEvent::Key1Pressed => {
+                    let topic_str = topics.button_press(1).unwrap();
+                    let topic =
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
+                    let _ = client
+                        .publish(
+                            &PublicationOptions::new(TopicReference::Name(topic)),
+                            rust_mqtt::Bytes::Borrowed(b"pressed" as &[u8]),
+                        )
+                        .await;
+                }
+                AppEvent::Key2Pressed => {
+                    let topic_str = topics.button_press(2).unwrap();
+                    let topic =
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
+                    let _ = client
+                        .publish(
+                            &PublicationOptions::new(TopicReference::Name(topic)),
+                            rust_mqtt::Bytes::Borrowed(b"pressed" as &[u8]),
+                        )
+                        .await;
+                }
+                AppEvent::Key3Pressed => {
+                    let topic_str = topics.button_press(3).unwrap();
+                    let topic =
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
+                    let _ = client
+                        .publish(
+                            &PublicationOptions::new(TopicReference::Name(topic)),
+                            rust_mqtt::Bytes::Borrowed(b"pressed" as &[u8]),
+                        )
+                        .await;
+                }
                 _ => {}
             },
             Either3::Third(_) => {
@@ -304,8 +338,13 @@ fn parse_u8(payload: &str) -> Option<u8> {
     payload.parse::<u8>().ok()
 }
 
-fn parse_str(_payload: &str) -> Option<&'static str> {
-    // In a real application, you'd map this to a static or copy it to a heapless::String.
-    // For simplicity, we leak/cast or use an existing pre-allocated static pool. TODO
-    Some(core::hint::black_box("http://example.com/stream.mp3"))
+static URL_BUFFER: StaticCell<String<256>> = StaticCell::new();
+
+fn parse_str(payload: &str) -> Option<&'static str> {
+    let cell = URL_BUFFER
+        .try_init(String::try_from(payload).unwrap())
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| unsafe { URL_BUFFER.uninit().assume_init_mut().as_str() });
+
+    Some(cell)
 }

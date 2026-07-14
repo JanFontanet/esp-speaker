@@ -1,4 +1,5 @@
 use embassy_executor::Spawner;
+use embassy_futures::select::{Either, select};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex,
     channel::Channel,
@@ -60,19 +61,47 @@ async fn audio_task(
     // TODO: React to commands received by any channel & send events
     loop {
         // Idle here with the amplifier powered down (no idle hiss).
-        let sound = AUDIO_CHANNEL.receive().await;
+        let sound_fut = AUDIO_CHANNEL.receive();
+        let cmd_fut = cmd_rx.receive();
 
-        // Power the amp up once, drain everything currently queued, then power
-        // it back down — this avoids clicking the amp on/off between
-        // back-to-back sounds.
-        audio.set_output_enabled(true).await;
-        let mut next = Some(sound);
-        while let Some(sound) = next {
-            if let Err(e) = audio.play(sound).await {
-                defmt::error!("audio: playback error: {:?}", e);
+        match select(sound_fut, cmd_fut).await {
+            Either::First(s) => {
+                // Power the amp up once, drain everything currently queued, then power
+                // it back down — this avoids clicking the amp on/off between
+                // back-to-back sounds.
+                audio.set_output_enabled(true).await;
+                let _ = event_tx.send(AppEvent::PlaybackStarted).await;
+
+                let mut next = Some(s);
+                while let Some(sound) = next {
+                    if let Err(e) = audio.play(sound).await {
+                        defmt::error!("audio: playback error: {:?}", e);
+                    }
+                    next = AUDIO_CHANNEL.try_receive().ok();
+                }
+
+                audio.set_output_enabled(false).await;
+                let _ = event_tx.send(AppEvent::PlaybackStopped).await;
             }
-            next = AUDIO_CHANNEL.try_receive().ok();
+            Either::Second(cmd) => match cmd {
+                AudioCommand::Play => {
+                    defmt::info!("Play received!");
+                    audio.set_output_enabled(true).await;
+                    let _ = event_tx.send(AppEvent::PlaybackStarted).await;
+                    if let Err(_) = audio.play_connected().await {
+                        defmt::error!("Error playing audio?");
+                    }
+                    audio.set_output_enabled(false).await;
+                    let _ = event_tx.send(AppEvent::PlaybackStopped).await;
+                    defmt::info!("Audio sent");
+                }
+                AudioCommand::Pause => todo!(),
+                AudioCommand::Stop => todo!(),
+                AudioCommand::SetVolume(_) => todo!(),
+                AudioCommand::PlayUrl(uri) => {
+                    defmt::info!("PlayUri received! {}", uri);
+                }
+            },
         }
-        audio.set_output_enabled(false).await;
     }
 }

@@ -10,11 +10,9 @@ use defmt::{error, info, warn};
 use embassy_executor::Spawner;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::i2c::master::{Config as I2cConfig, I2c};
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 use espeaker::config::PANIC_REBOOT_DELAY_SECS;
@@ -22,9 +20,9 @@ use static_cell::StaticCell;
 
 use espeaker::{
     audio::{Sound, audio_send, audio_spawn},
-    board::{Board, I2cBus},
+    board::Board,
     boot,
-    button::button_spawn,
+    button::{boot_button_spawn, button_spawn},
     config,
     led::{Animation, Color, LedCommand, led_send, led_spawn},
     mqtt::{
@@ -54,6 +52,7 @@ static EVENT_CHANNEL: StaticCell<
 async fn main(spawner: Spawner) -> ! {
     let hal_config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(hal_config);
+
     let board = Board::new(peripherals);
 
     // -------------- Initializing embassy ----------------
@@ -74,17 +73,34 @@ async fn main(spawner: Spawner) -> ! {
     let event_tx = event_chan.sender();
     let event_rx: EventReceiver<AppEvent> = event_chan.receiver();
 
-    let i2c = I2c::new(board.i2c0, I2cConfig::default())
-        .unwrap()
-        .with_sda(board.i2c_sda)
-        .with_scl(board.i2c_scl);
-    static I2C_BUS: StaticCell<I2cBus> = StaticCell::new();
-    let i2c_bus: &'static I2cBus = I2C_BUS.init(Mutex::new(i2c));
-
     let mut nvs = Nvs::new(board.flash);
     led_spawn(&spawner, board.rmt, board.led_pin); // TODO: we can use cmds & events here too
-    button_spawn(&spawner, board.boot_button); // TODO: we can use cmds & events here too
-    audio_spawn(&spawner, board.audio, i2c_bus, cmd_rx, event_tx.clone());
+    boot_button_spawn(&spawner, board.boot_button);
+    button_spawn(
+        &spawner,
+        board.key1,
+        event_tx.clone(),
+        AppEvent::Key1Pressed,
+    );
+    button_spawn(
+        &spawner,
+        board.key2,
+        event_tx.clone(),
+        AppEvent::Key2Pressed,
+    );
+    button_spawn(
+        &spawner,
+        board.key3,
+        event_tx.clone(),
+        AppEvent::Key3Pressed,
+    );
+    audio_spawn(
+        &spawner,
+        board.audio,
+        board.i2c_bus,
+        cmd_rx,
+        event_tx.clone(),
+    );
 
     led_send(LedCommand::Brightness(config::DEFAULT_LED_BRIGHTNESS));
     led_send(LedCommand::Loop(Animation::Chase {
@@ -132,7 +148,7 @@ async fn main(spawner: Spawner) -> ! {
             {
                 Ok(stack) => {
                     boot::set_sta_fail_count(0);
-                    time::time_spawn(&spawner, stack, i2c_bus);
+                    time::time_spawn(&spawner, stack, board.i2c_bus);
                     let device_id = config::device_id();
                     mqtt::mqtt_spawn(&spawner, stack, &creds, device_id, cmd_tx, event_rx);
                     ready().await
