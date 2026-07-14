@@ -133,7 +133,15 @@ async fn main(spawner: Spawner) -> ! {
                     boot::set_sta_fail_count(0);
                     time::time_spawn(&spawner, stack, i2c_bus);
                     let device_id = config::device_id();
-                    mqtt::mqtt_spawn(&spawner, stack, &creds, device_id, cmd_tx, event_rx);
+                    mqtt::mqtt_spawn(
+                        &spawner,
+                        stack,
+                        &creds,
+                        device_id,
+                        cmd_tx,
+                        event_rx,
+                        event_tx.clone(),
+                    );
                     ready().await
                 }
                 Err(e) => {

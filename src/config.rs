@@ -19,13 +19,12 @@ pub const AP_SUBNET_PREFIX_LEN: u8 = 24;
 
 // MQTT
 pub const MQTT_PORT: u16 = 1883;
-pub const MQTT_KEEPALIVE_SECS: u16 = 30;
+pub const MQTT_KEEPALIVE_SECS: u16 = 20;
 pub const MQTT_SESSION_EXPIRY_SECS: u32 = 60;
-pub const MQTT_SOCKET_TIMEOUT_SECS: u16 = 10;
+pub const MQTT_SOCKET_TIMEOUT_SECS: u16 = 30;
 pub const MQTT_RECONNECT_DELAY_SECS: u8 = 5;
-pub const MQTT_TOPIC_COMMANDS: &str = "speaker/commands";
-pub const MQTT_TOPIC_STATUS: &str = "speaker/status";
-pub const MQTT_TOPIC_VOLUME: &str = "speaker/volume";
+// pub const MQTT_TOPIC_STATUS: &str = "speaker/status";
+// pub const MQTT_TOPIC_VOLUME: &str = "speaker/volume";
 
 // Time sync
 pub const NTP_SERVER: &str = "pool.ntp.org";
@@ -56,17 +55,17 @@ pub const CODEC_UNMUTE_AMP_ON_DELAY_MS: u64 = 10;
 pub const CODEC_AMP_ON_PLAY_DELAY_MS: u64 = 30;
 pub const CODEC_AMP_OFF_MUTE_DELAY_MS: u64 = 5;
 
-/// Return a stable unique device identifier based on the factory base MAC
-/// address burned into eFuse at manufacturing (format: `ES-AABBCCDDEEFF`).
-///
-/// The returned `&'static str` lives forever — safe to pass across task
-/// boundaries and to `rust_mqtt::MqttString`.
 pub fn device_id() -> &'static str {
     let mac = esp_hal::efuse::base_mac_address();
     let bytes = mac.as_bytes(); // &[u8; 6]
 
     static CELL: static_cell::StaticCell<[u8; 16]> = static_cell::StaticCell::new();
     let buf = CELL.init([0u8; 16]);
+
+    // Write the "ES-" prefix
+    buf[0] = b'E';
+    buf[1] = b'S';
+    buf[2] = b'-';
 
     let mut pos = 3;
     for byte in bytes {

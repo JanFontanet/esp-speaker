@@ -10,7 +10,7 @@ use embassy_sync::channel::{Receiver, Sender};
 use embassy_time::{Duration, Timer};
 use rust_mqtt::client::options::{PublicationOptions, SubscriptionOptions, TopicReference};
 use rust_mqtt::config::{KeepAlive, SessionExpiryInterval};
-use rust_mqtt::types::{MqttString, TopicName};
+use rust_mqtt::types::{MqttString, TopicFilter, TopicName};
 use rust_mqtt::{
     buffer::AllocBuffer,
     client::{
@@ -19,13 +19,13 @@ use rust_mqtt::{
         options::{ConnectOptions, DisconnectOptions},
     },
 };
+use static_cell::StaticCell;
 
 use crate::config::{
     CHANNEL_SIZE, MQTT_KEEPALIVE_SECS, MQTT_PORT, MQTT_RECONNECT_DELAY_SECS,
-    MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS, MQTT_TOPIC_COMMANDS, MQTT_TOPIC_STATUS,
-    MQTT_TOPIC_VOLUME,
+    MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS,
 };
-use crate::mqtt::msg_protocol::{AppEvent, AudioCommand};
+use crate::mqtt::msg_protocol::{AppEvent, AudioCommand, MQTTTopics};
 use crate::wifi::DeviceConfig;
 
 pub type CmdSender = Sender<'static, CriticalSectionRawMutex, AudioCommand, CHANNEL_SIZE>;
@@ -85,6 +85,9 @@ pub enum MQTTError {
     SpawnError,
 }
 
+static USER_CELL: StaticCell<heapless::String<32>> = StaticCell::new();
+static PWD_CELL: StaticCell<heapless::String<64>> = StaticCell::new();
+
 pub fn mqtt_spawn(
     spawner: &Spawner,
     stack: Stack<'static>,
@@ -92,23 +95,52 @@ pub fn mqtt_spawn(
     client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
+    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) {
     let mqtt_address: Ipv4Addr = config.mqtt_address().parse().unwrap();
     let addr = SocketAddr::new(mqtt_address.into(), MQTT_PORT);
+    let mqtt_user = USER_CELL
+        .try_init(heapless::String::try_from(config.mqtt_user()).unwrap())
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| unsafe { USER_CELL.uninit().assume_init_mut().as_str() });
 
-    spawner.spawn(mqtt_task(stack, addr, client_id, cmd_tx, event_rx).unwrap());
+    let mqtt_pwd = PWD_CELL
+        .try_init(heapless::String::try_from(config.mqtt_pwd()).unwrap())
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| unsafe { PWD_CELL.uninit().assume_init_mut().as_str() });
+
+    spawner.spawn(
+        mqtt_task(
+            stack, addr, mqtt_user, mqtt_pwd, client_id, cmd_tx, event_rx, event_tx,
+        )
+        .unwrap(),
+    );
 }
 
 #[embassy_executor::task]
 async fn mqtt_task(
     stack: Stack<'static>,
     mqtt_address: SocketAddr,
+    mqtt_user: &'static str,
+    mqtt_pwd: &'static str,
     client_id: &'static str,
     cmd_tx: CmdSender,
     event_rx: EventReceiver<AppEvent>,
+    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) {
     loop {
-        if let Err(_e) = run_mqtt(stack, mqtt_address, client_id, &cmd_tx, &event_rx).await {
+        if let Err(_) = run_mqtt(
+            stack,
+            mqtt_address,
+            mqtt_user,
+            mqtt_pwd,
+            client_id,
+            &cmd_tx,
+            &event_rx,
+            event_tx,
+        )
+        .await
+        {
             defmt::error!("MQTT error, reconnecting in 5s...");
             Timer::after(Duration::from_secs(MQTT_RECONNECT_DELAY_SECS as u64)).await;
         }
@@ -118,9 +150,12 @@ async fn mqtt_task(
 async fn run_mqtt(
     stack: Stack<'static>,
     mqtt_address: SocketAddr,
+    mqtt_user: &'static str,
+    mqtt_pwd: &'static str,
     client_id: &'static str,
     cmd_tx: &CmdSender,
     event_rx: &EventReceiver<AppEvent>,
+    event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
 ) -> Result<(), ()> {
     let mut rx_buffer = [0u8; 4096];
     let mut tx_buffer = [0u8; 4096];
@@ -157,19 +192,25 @@ async fn run_mqtt(
                 .session_expiry_interval(SessionExpiryInterval::Seconds(MQTT_SESSION_EXPIRY_SECS))
                 .keep_alive(KeepAlive::Seconds(
                     NonZero::new(MQTT_KEEPALIVE_SECS).unwrap(),
-                )),
+                ))
+                .user_name(MqttString::from_str(mqtt_user).unwrap())
+                .password(MqttString::from_str(mqtt_pwd).unwrap().into()),
             Some(MqttString::from_str(client_id).unwrap()),
         )
         .await
     {
         Ok(info) => defmt::info!("mqtt: connected, session_present={}", info.session_present),
-        Err(_) => {
-            defmt::error!("mqtt: CONNECT failed");
+        Err(e) => {
+            defmt::error!("mqtt: CONNECT failed {}", e);
             return Err(());
         }
     }
 
-    let command_topic = TopicName::new(MqttString::from_str(MQTT_TOPIC_COMMANDS).unwrap()).unwrap();
+    let topics = MQTTTopics::new(client_id);
+    let wildcard = topics.subscrive_wildcard().unwrap();
+    defmt::info!("wildcard: {}", wildcard);
+    let mqtt_wildcard = MqttString::from_str(wildcard.as_str()).unwrap();
+    let command_topic = TopicFilter::new(mqtt_wildcard).unwrap();
     client
         .subscribe(
             command_topic.as_borrowed().into(),
@@ -177,7 +218,8 @@ async fn run_mqtt(
         )
         .await
         .map_err(|_| defmt::error!("mqtt subscrive failed"))?;
-    // Poll loop
+
+    // Poll loop (TODO: send pings)
     loop {
         let network_fut = client.poll();
         let event_fut = event_rx.receive();
@@ -188,26 +230,31 @@ async fn run_mqtt(
                 let payload = from_utf8(publish.message.as_bytes()).unwrap_or("");
                 defmt::info!("mqtt rx: [{}] {}", topic, payload);
 
-                route_mqtt!(
-                    topic, payload, cmd_tx;
-                    {
-                        "speaker/commands/play"   => Play,
-                        "speaker/commands/pause"  => Pause,
-                        "speaker/commands/stop"   => Stop,
-                        "speaker/commands/volume" => SetVolume(parse_u8),
-                        "speaker/commands/stream" => PlayUrl(parse_str),
-                    }
-                );
+                if let Some(cmd) = topic.strip_prefix(topics.get_prefix().unwrap().as_str()) {
+                    route_mqtt!(
+                        cmd, payload, cmd_tx;
+                        {
+                            "audio/play"   => Play,
+                            "audio/pause"  => Pause,
+                            "audio/stop"   => Stop,
+                            "audio/volume" => SetVolume(parse_u8),
+                            "audio/stream" => PlayUrl(parse_str),
+                        }
+                    );
+                }
             }
-            Either::First(Ok(_)) => {}
-            Either::First(Err(_e)) => {
-                defmt::error!("mqtt: network poll error");
+            Either::First(Ok(item)) => {
+                defmt::debug!("Received an uncontrolled Ok {}", item)
+            }
+            Either::First(Err(e)) => {
+                defmt::error!("mqtt: network poll error {}", e);
                 break;
             }
             Either::Second(app_event) => match app_event {
                 AppEvent::PlaybackStarted => {
+                    let topic_str = topics.status().unwrap();
                     let topic =
-                        TopicName::new(MqttString::from_str(MQTT_TOPIC_STATUS).unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
@@ -216,8 +263,9 @@ async fn run_mqtt(
                         .await;
                 }
                 AppEvent::PlaybackStopped => {
+                    let topic_str = topics.status().unwrap();
                     let topic =
-                        TopicName::new(MqttString::from_str(MQTT_TOPIC_STATUS).unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
@@ -226,8 +274,9 @@ async fn run_mqtt(
                         .await;
                 }
                 AppEvent::VolumeChanged(vol) => {
+                    let topic_str = topics.volume_changed().unwrap();
                     let topic =
-                        TopicName::new(MqttString::from_str(MQTT_TOPIC_VOLUME).unwrap()).unwrap();
+                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
 
                     let _ = client
                         .publish(
