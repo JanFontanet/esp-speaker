@@ -26,7 +26,7 @@ use crate::config::{
     CHANNEL_SIZE, MQTT_KEEPALIVE_SECS, MQTT_PORT, MQTT_RECONNECT_DELAY_SECS,
     MQTT_SESSION_EXPIRY_SECS, MQTT_SOCKET_TIMEOUT_SECS,
 };
-use crate::led::{Color, LedCommand, led_send};
+use crate::led::{Animation, Color, LedCommand, led_send};
 use crate::mqtt::msg_protocol::{AppEvent, MQTTTopics};
 use crate::wifi::DeviceConfig;
 
@@ -326,6 +326,7 @@ fn parse_led_command(operation: &str, payload: &str) -> Option<LedCommand> {
         "clear" => Some(LedCommand::Clear),
         "brightness" => payload.parse().ok().map(LedCommand::Brightness),
         "color" => parse_color(payload).map(LedCommand::SetAll),
+        "animate" => parse_animation(payload).map(LedCommand::Loop),
         _ => None,
     }
 }
@@ -341,4 +342,27 @@ fn parse_color(payload: &str) -> Option<Color> {
     }
 
     Some(Color::new(red, green, blue))
+}
+
+fn parse_animation(payload: &str) -> Option<Animation> {
+    let (action, params) = payload.split_once("(").unwrap_or((payload, ""));
+    match action {
+        "rainbow" => {
+            let speed = params.split(")").next().unwrap_or("3").parse().ok()?;
+            Some(Animation::Rainbow { speed: speed })
+        }
+        "pulse" => {
+            let mut p = params.split(")").next().unwrap_or("").split(",");
+            let red = p.next().unwrap_or("0").parse().ok()?;
+            let green = p.next().unwrap_or("50").parse().ok()?;
+            let blue = p.next().unwrap_or("100").parse().ok()?;
+            let speed = p.next().unwrap_or("3").parse().ok()?;
+
+            Some(Animation::Pulse {
+                color: Color::new(red, green, blue),
+                speed: speed,
+            })
+        }
+        _ => None,
+    }
 }

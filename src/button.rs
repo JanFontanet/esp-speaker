@@ -24,7 +24,7 @@ pub fn button_spawn<const N: u8>(
     spawner.spawn(button_task(button.into_runtime(), event_tx, event).unwrap());
 }
 
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 3)]
 async fn button_task(
     button: ButtonRuntime,
     event_tx: Sender<'static, CriticalSectionRawMutex, AppEvent, CHANNEL_SIZE>,
