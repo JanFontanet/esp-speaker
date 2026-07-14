@@ -8,7 +8,7 @@ use codec::Codec;
 use sine::SineGenerator;
 
 use crate::board::{AudioResources, I2cBus};
-use crate::config::{AUDIO_DMA_BUF_SIZE, AUDIO_SAMPLE_RATE};
+use crate::config::{AUDIO_DMA_BUF_SIZE, AUDIO_SAMPLE_RATE, DEFAULT_VOLUME};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     Async, dma_buffers,
@@ -30,6 +30,8 @@ pub struct Audio<'d> {
     i2s_tx: I2sTx<'d, Async>,
     tx_buf: &'static mut [u8],
     codec: Codec,
+    volume: f32,
+    announcement: Option<AnnouncementStream>,
 }
 
 impl<'d> Audio<'d> {
@@ -62,6 +64,8 @@ impl<'d> Audio<'d> {
             i2s_tx,
             tx_buf: tx_buffer,
             codec,
+            volume: volume_multiplier(DEFAULT_VOLUME),
+            announcement: None,
         })
     }
 
@@ -69,6 +73,31 @@ impl<'d> Audio<'d> {
     /// this to keep the amp powered down except while a sound is playing.
     pub(crate) async fn set_output_enabled(&mut self, on: bool) {
         self.codec.set_output_enabled(on).await;
+    }
+
+    pub(crate) async fn set_volume(&mut self, level: u8) {
+        self.volume = volume_multiplier(level);
+        self.codec.set_volume(level).await;
+    }
+
+    pub(crate) async fn play_announcement_chunk(&mut self, chunk: &[u8]) -> Result<(), AudioError> {
+        let stream = self
+            .announcement
+            .get_or_insert_with(AnnouncementStream::new);
+        stream.push_chunk(chunk);
+
+        loop {
+            let count = stream.take_bytes(&mut self.tx_buf[..]);
+            if count == 0 {
+                break;
+            }
+            self.i2s_tx
+                .write_dma_async(&mut self.tx_buf[..count])
+                .await
+                .map_err(|_| AudioError::I2sError)?;
+        }
+
+        Ok(())
     }
 
     /// Play a queued [`Sound`]. Called by the audio task.
@@ -97,7 +126,7 @@ impl<'d> Audio<'d> {
             amplitude,
             duration_ms
         );
-        let mut r#gen = SineGenerator::new(AUDIO_SAMPLE_RATE, frequency, amplitude);
+        let mut r#gen = SineGenerator::new(AUDIO_SAMPLE_RATE, frequency, amplitude * self.volume);
 
         let end = embassy_time::Instant::now() + Duration::from_millis(duration_ms);
 
@@ -152,7 +181,7 @@ impl<'d> Audio<'d> {
             while i + 1 < samples.len() {
                 let out = if n < total_frames {
                     let env = note_envelope(n, total_frames, attack, release);
-                    let s = (osc.sample() as f32 * amplitude * env) as i16;
+                    let s = (osc.sample() as f32 * amplitude * self.volume * env) as i16;
                     n += 1;
                     s
                 } else {
@@ -183,6 +212,78 @@ impl<'d> Audio<'d> {
 /// Percussive amplitude envelope in `0.0..=1.0` for frame `n` of `total`:
 /// a gentle linear attack, an exponential decay, and a linear release that
 /// fades fully to silence so notes don't end on a step (which clicks).
+struct AnnouncementStream {
+    buffer: [u8; 4096],
+    head: usize,
+    len: usize,
+    header_bytes: [u8; 44],
+    header_len: usize,
+    header_parsed: bool,
+}
+
+impl AnnouncementStream {
+    fn new() -> Self {
+        Self {
+            buffer: [0; 4096],
+            head: 0,
+            len: 0,
+            header_bytes: [0; 44],
+            header_len: 0,
+            header_parsed: false,
+        }
+    }
+
+    fn push_chunk(&mut self, chunk: &[u8]) {
+        for &byte in chunk {
+            if self.len >= self.buffer.len() {
+                break;
+            }
+            self.buffer[(self.head + self.len) % self.buffer.len()] = byte;
+            self.len += 1;
+        }
+    }
+
+    fn take_bytes(&mut self, dst: &mut [u8]) -> usize {
+        if self.len == 0 {
+            return 0;
+        }
+
+        if !self.header_parsed {
+            while self.header_len < self.header_bytes.len() && self.len > 0 {
+                self.header_bytes[self.header_len] = self.take_one();
+                self.header_len += 1;
+            }
+            if self.header_len >= self.header_bytes.len() {
+                self.header_parsed = true;
+            }
+            if !self.header_parsed {
+                return 0;
+            }
+        }
+
+        let count = core::cmp::min(self.len, dst.len());
+        for i in 0..count {
+            dst[i] = self.take_one();
+        }
+        count
+    }
+
+    fn take_one(&mut self) -> u8 {
+        let byte = self.buffer[self.head];
+        self.head = (self.head + 1) % self.buffer.len();
+        self.len -= 1;
+        byte
+    }
+}
+
+fn volume_multiplier(level: u8) -> f32 {
+    if level == 0 {
+        0.0
+    } else {
+        level as f32 / 100.0
+    }
+}
+
 fn note_envelope(n: u32, total: u32, attack: u32, release: u32) -> f32 {
     let attack_gain = if n < attack {
         n as f32 / attack as f32
@@ -197,4 +298,31 @@ fn note_envelope(n: u32, total: u32, attack: u32, release: u32) -> f32 {
     let progress = n as f32 / total as f32;
     let decay = (-3.0 * progress).exp();
     attack_gain * release_gain * decay
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AnnouncementStream, volume_multiplier};
+
+    #[test]
+    fn volume_multiplier_maps_zero_and_full() {
+        assert_eq!(volume_multiplier(0), 0.0);
+        assert_eq!(volume_multiplier(100), 1.0);
+        assert_eq!(volume_multiplier(50), 0.5);
+    }
+
+    #[test]
+    fn announcement_stream_skips_wav_header_and_returns_pcm_bytes() {
+        let mut stream = AnnouncementStream::new();
+        let mut header = [0u8; 44];
+        header[..4].copy_from_slice(b"RIFF");
+        stream.push_chunk(&header);
+        stream.push_chunk(&[0x01, 0x02, 0x03, 0x04]);
+
+        let mut out = [0u8; 4];
+        let first = stream.take_bytes(&mut out);
+        assert_eq!(first, 4);
+        assert_eq!(out, [0x01, 0x02, 0x03, 0x04]);
+        assert_eq!(stream.take_bytes(&mut out), 0);
+    }
 }

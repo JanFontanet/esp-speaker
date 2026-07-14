@@ -49,6 +49,10 @@ impl CommandRouter {
             return;
         };
 
+        if operation == "state" || operation == "attributes" {
+            return;
+        }
+
         match domain {
             "audio" => match parse_audio_command(operation, payload) {
                 Some(command) => self.audio_tx.send(command).await,
@@ -58,7 +62,39 @@ impl CommandRouter {
                 Some(command) => led_send(command),
                 None => defmt::warn!("mqtt: invalid LED command '{}': '{}'", operation, payload),
             },
+            "media_player" => self.handle_media_player_command(operation, payload).await,
             _ => defmt::warn!("mqtt: unknown command domain '{}'", domain),
+        }
+    }
+
+    async fn handle_media_player_command(&self, operation: &str, payload: &str) {
+        match operation {
+            "set" => {
+                if payload == "PLAY" || payload.contains("\"command\":\"play\"") {
+                    let _ = self.audio_tx.send(AudioCommand::Play).await;
+                } else if payload == "PAUSE" || payload.contains("\"command\":\"pause\"") {
+                    let _ = self.audio_tx.send(AudioCommand::Pause).await;
+                } else if payload == "STOP" || payload.contains("\"command\":\"stop\"") {
+                    let _ = self.audio_tx.send(AudioCommand::Stop).await;
+                } else if let Some(value) = payload.strip_prefix("{\"volume_level\":") {
+                    if let Some(end) = value.find('}') {
+                        if let Ok(level) = value[..end].parse::<u8>() {
+                            let _ = self.audio_tx.send(AudioCommand::SetVolume(level)).await;
+                        }
+                    }
+                } else if payload.starts_with("{\"announce\":\"") {
+                    let announcement = payload
+                        .trim_start_matches("{\"announce\":\"")
+                        .trim_end_matches("\"}");
+                    let _ = self
+                        .audio_tx
+                        .send(AudioCommand::PlayAnnouncement(
+                            heapless::String::try_from(announcement).unwrap_or_default(),
+                        ))
+                        .await;
+                }
+            }
+            _ => defmt::warn!("mqtt: unsupported media_player operation '{}'", operation),
         }
     }
 }
@@ -187,8 +223,38 @@ async fn run_mqtt(
     }
 
     let topics = MQTTTopics::new(client_id);
+    let discovery_topic = topics.media_player_discovery().unwrap();
+    let command_topic = topics.media_player_command().unwrap();
+    let state_topic = topics.media_player_state().unwrap();
+    let attributes_topic = topics.media_player_attributes().unwrap();
+    let entity_id = topics.media_player_entity_id().unwrap();
+    let discovery_payload = [
+        br#"{"command_topic":""#,
+        command_topic.as_str().as_bytes(),
+        br#"","state_topic":""#,
+        state_topic.as_str().as_bytes(),
+        br#"","attributes_topic":""#,
+        attributes_topic.as_str().as_bytes(),
+        br#"","name":"ESpeaker","unique_id":""#,
+        client_id.as_bytes(),
+        br#"","entity_id":""#,
+        entity_id.as_str().as_bytes(),
+        br#"","device":{"identifiers":[""#,
+        client_id.as_bytes(),
+        br#""],"name":"ESpeaker","manufacturer":"espeaker"},"icon":"mdi:speaker","schema":"json","supported_features":5}"#,
+    ];
+    let discovery_payload = discovery_payload.concat();
+    let discovery_payload = discovery_payload.as_slice();
+    let _ = client
+        .publish(
+            &PublicationOptions::new(TopicReference::Name(
+                TopicName::new(MqttString::from_str(discovery_topic.as_str()).unwrap()).unwrap(),
+            )),
+            rust_mqtt::Bytes::Borrowed(discovery_payload),
+        )
+        .await;
+
     let wildcard = topics.subscrive_wildcard().unwrap();
-    defmt::info!("wildcard: {}", wildcard);
     let mqtt_wildcard = MqttString::from_str(wildcard.as_str()).unwrap();
     let command_topic = TopicFilter::new(mqtt_wildcard).unwrap();
     client
@@ -224,24 +290,45 @@ async fn run_mqtt(
             }
             Either3::Second(app_event) => match app_event {
                 AppEvent::PlaybackStarted => {
-                    let topic_str = topics.status().unwrap();
-                    let topic =
-                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
+                    let state_topic = topics.media_player_state().unwrap();
+                    let topic = TopicName::new(MqttString::from_str(state_topic.as_str()).unwrap())
+                        .unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
                             rust_mqtt::Bytes::Borrowed(b"playing" as &[u8]),
                         )
                         .await;
+                    let attrs_topic = topics.media_player_attributes().unwrap();
+                    let attrs = TopicName::new(MqttString::from_str(attrs_topic.as_str()).unwrap())
+                        .unwrap();
+                    let payload =
+                        br#"{"state":"playing","volume_level":0.7,"media_title":"announcement"}"#;
+                    let _ = client
+                        .publish(
+                            &PublicationOptions::new(TopicReference::Name(attrs)),
+                            rust_mqtt::Bytes::Borrowed(payload),
+                        )
+                        .await;
                 }
                 AppEvent::PlaybackStopped => {
-                    let topic_str = topics.status().unwrap();
-                    let topic =
-                        TopicName::new(MqttString::from_str(topic_str.as_str()).unwrap()).unwrap();
+                    let state_topic = topics.media_player_state().unwrap();
+                    let topic = TopicName::new(MqttString::from_str(state_topic.as_str()).unwrap())
+                        .unwrap();
                     let _ = client
                         .publish(
                             &PublicationOptions::new(TopicReference::Name(topic)),
                             rust_mqtt::Bytes::Borrowed(b"stopped" as &[u8]),
+                        )
+                        .await;
+                    let attrs_topic = topics.media_player_attributes().unwrap();
+                    let attrs = TopicName::new(MqttString::from_str(attrs_topic.as_str()).unwrap())
+                        .unwrap();
+                    let payload = br#"{"state":"stopped","volume_level":0.7,"media_title":"idle"}"#;
+                    let _ = client
+                        .publish(
+                            &PublicationOptions::new(TopicReference::Name(attrs)),
+                            rust_mqtt::Bytes::Borrowed(payload),
                         )
                         .await;
                 }
@@ -317,6 +404,9 @@ fn parse_audio_command(operation: &str, payload: &str) -> Option<AudioCommand> {
         "stream" => heapless::String::try_from(payload)
             .ok()
             .map(AudioCommand::PlayUrl),
+        "announce" => heapless::String::try_from(payload)
+            .ok()
+            .map(AudioCommand::PlayAnnouncement),
         _ => None,
     }
 }

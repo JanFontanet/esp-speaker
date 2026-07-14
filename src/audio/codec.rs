@@ -73,6 +73,11 @@ impl Codec {
         Ok(Self { bus, es8311: codec })
     }
 
+    pub async fn set_volume(&mut self, level: u8) {
+        let mut guard = self.bus.lock().await;
+        let _ = self.es8311.volume_set(&mut *guard, level.min(100), None);
+    }
+
     /// Enable or disable the speaker output path.
     ///
     /// The amplifier is only powered while audio is actually playing, which

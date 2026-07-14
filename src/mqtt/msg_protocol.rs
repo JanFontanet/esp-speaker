@@ -54,6 +54,34 @@ impl MQTTTopics {
         self.build_topic("status")
     }
 
+    pub fn media_player_discovery(&self) -> Result<String<64>, core::fmt::Error> {
+        let mut topic = String::new();
+        write!(
+            &mut topic,
+            "homeassistant/media_player/{}/config",
+            self.device_id
+        )?;
+        Ok(topic)
+    }
+
+    pub fn media_player_entity_id(&self) -> Result<String<64>, core::fmt::Error> {
+        let mut entity_id = String::new();
+        write!(&mut entity_id, "media_player.{}", self.device_id)?;
+        Ok(entity_id)
+    }
+
+    pub fn media_player_state(&self) -> Result<String<64>, core::fmt::Error> {
+        self.build_topic("media_player/state")
+    }
+
+    pub fn media_player_command(&self) -> Result<String<64>, core::fmt::Error> {
+        self.build_topic("media_player/set")
+    }
+
+    pub fn media_player_attributes(&self) -> Result<String<64>, core::fmt::Error> {
+        self.build_topic("media_player/attributes")
+    }
+
     pub fn button_press(&self, button_id: u8) -> Result<String<64>, core::fmt::Error> {
         let mut topic = String::new();
         write!(
